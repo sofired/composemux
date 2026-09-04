@@ -10,8 +10,13 @@
 # satisfy the check. GitHub Apps cannot be listed as code owners, so requiring
 # a code owner's approval means a person has to sign off.
 #
-# Only accounts with write access count as code owners. Listing someone with
-# read access silently does nothing.
+# Two rules for anything added below:
+#
+#   1. Only accounts with write access count. Listing a read-only account
+#      silently does nothing.
+#   2. People only. Never add a bot or an automation account, even one the
+#      project controls -- that hands the human approval back to a machine and
+#      reopens the gap this file exists to close.
 #
 # When there is more than one maintainer, prefer a team over individuals
 # (`* @sofired/maintainers`), so people can be added or removed without a
