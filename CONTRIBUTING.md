@@ -1,36 +1,50 @@
 # Contributing to composemux
 
-Contributions are welcome — bug reports, fixes, docs, and features alike.
+Bug reports, fixes, docs, features — all welcome, and small PRs are genuinely
+fine. This guide exists so you don't spend an evening on something that was
+always going to be declined, and so you know what CI is about to say before it
+says it.
 
-Please read the section below before opening a pull request that changes
-behaviour. This project has an unusual design constraint, and it is the most
-common reason a well-written PR would be turned down.
+Start with the next section. It's short, and it's the most common reason a
+well-written PR gets turned down.
 
-## The one unusual rule: this is a port
+## Before you change a keybinding
 
-composemux deliberately reproduces the interaction model of the
-[Nx terminal UI](https://nx.dev/blog/nx-21-terminal-ui) — its keybindings, its
-layout arithmetic, its colours, its pinning semantics. That is the point of the
-tool. People arrive already knowing how to drive it because they use the Nx TUI
-on other projects, and that transfer is the feature.
+composemux reproduces the [Nx terminal UI](https://nx.dev/blog/nx-21-terminal-ui)
+— its keybindings, layout arithmetic, colours and pinning semantics — on
+purpose, because people arrive already knowing how to drive it, and that
+transfer *is* the feature. So a change that makes a binding "more intuitive"
+but diverges from Nx will usually be declined even when it's better in
+isolation; if you think a divergence is genuinely warranted, open an issue and
+make the case before you write the code.
 
-So **matching Nx is a constraint, not an accident**:
+Two related notes, so they don't surprise you mid-review:
 
-- A change that makes a keybinding "more intuitive" but diverges from Nx will
-  usually be declined, even if the new binding is genuinely better in isolation.
-- Layout constants (`⌊width/3⌋` sidebars, the auto-layout breakpoints, scroll
-  momentum figures) are ported values, not tuned ones. Don't adjust them to
-  taste.
-- Modules derived from Nx carry a header comment naming the upstream file. Keep
-  those comments accurate when you edit the module.
+- Layout constants (`⌊width/3⌋` sidebars, the auto-layout breakpoints, the
+  scroll-momentum figures) are ported values, not tuned ones. They look
+  arbitrary because they are somebody else's arbitrary.
+- Modules derived from upstream carry a header comment naming the file they
+  came from. Keep it accurate when you edit the module.
 
-Deviations are possible, but they need a reason that comes from *compose
-services being long-running where Nx tasks are short*. Two exist today, both
-documented in the README under "Deliberate differences from the Nx TUI". If you
-think you have a third, open an issue and make the case before writing the code.
+Deviations do exist — auto-exit only firing on a clean shutdown, and scroll
+position anchoring to content — and both earned their place by following from
+the same fact: compose services are long-running where Nx tasks are short.
+That's the shape of argument that works.
 
-If you are adding code adapted from Nx (or anywhere else), say so in the PR and
-note the upstream file. See [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
+If you're adapting code from anywhere else, say so in the PR and name the
+upstream file. See [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
+
+## Scope
+
+composemux is **read-only** by design. It attaches to containers something else
+started, and never starts, stops, restarts or execs into them. It's meant to
+sit inside a wrapper script that owns `compose up` and `compose down`, which is
+why its exit codes and terminal restoration are part of its contract with that
+caller rather than incidental details.
+
+A PR that adds lifecycle control would change what the tool *is*, so please
+open an issue first rather than arriving with an implementation you've already
+written.
 
 ## Getting set up
 
@@ -42,9 +56,9 @@ cd composemux
 cargo build
 ```
 
-Docker is **not** required to build or to run the test suite — the tests use
-pure functions, a `TestBackend`, and a fake environment rather than a live
-daemon. You will want Docker to exercise the tool for real:
+Docker is **not** required to build or to run the tests — they use pure
+functions, a `TestBackend`, and a fake environment rather than a live daemon.
+You'll want Docker to actually drive the thing:
 
 ```sh
 cargo run -- --project <some-running-compose-project>
@@ -52,7 +66,7 @@ cargo run -- --project <some-running-compose-project>
 
 ## Before you open a PR
 
-CI runs these on Linux, macOS and Windows, and they must pass:
+CI runs these on Linux, macOS and Windows, and they all have to pass:
 
 ```sh
 cargo fmt --all -- --check
@@ -63,18 +77,20 @@ cargo build --no-default-features   # clipboard fallback is optional
 
 ## Tests
 
-The suite is the main safety net for a port — it is what stops an innocuous
-refactor from silently changing behaviour that is supposed to match Nx. New
-behaviour should come with tests, and the existing style is worth matching:
+The suite is the safety net that makes a port maintainable: it's what stops an
+innocuous refactor from quietly changing behaviour that's supposed to match
+upstream. New behaviour should come with tests, and the existing style is worth
+matching:
 
-- **Name the scenario and the outcome**, not the function under test
-  (`a_running_container_whose_task_died_is_reattached`, not `test_resync`).
-- **Prefer pure functions over mocks.** Where logic needs Docker or a terminal,
-  the decision is usually extractable — see `event_decision` and
+- **Name the scenario and the outcome**, not the function under test.
+  `a_running_container_whose_task_died_is_reattached`, not `test_resync`. Test
+  names are the only documentation anyone reads at 2am.
+- **Prefer pure functions over mocks.** Where logic seems to need Docker or a
+  terminal, the decision usually pulls out — see `event_decision` and
   `plan_attachments` in `src/docker/stream.rs`, or `build_service` in
   `src/docker/client.rs`.
-- **Inject time rather than sleeping.** `ScrollMomentum::scroll` and `App::tick`
-  both take a `now: Instant` for this reason.
+- **Inject time rather than sleeping.** `ScrollMomentum::scroll` and
+  `App::tick` both take a `now: Instant` for exactly this reason.
 - **Assert on observable behaviour.** A test that would still pass with the
   feature deleted is worse than no test, because it reads as coverage.
 
@@ -94,34 +110,26 @@ src/tui/components/    rendering
 src/fallback.rs        plain streaming when stdout is not a TTY
 ```
 
-## Scope
-
-composemux is **read-only** by design. It attaches to containers that something
-else started and never starts, stops, restarts or execs into them. It is built
-to sit inside a wrapper script that owns `compose up` and `compose down`, so its
-exit codes and terminal restoration are part of its contract with that caller.
-
-PRs that add lifecycle control would change what the tool *is*, so please open
-an issue first rather than arriving with an implementation.
-
 ## Commits and pull requests
 
-- Keep the subject line short and in the imperative ("Fix …", not "Fixed …").
-- Explain *why* in the body when the reason isn't obvious from the diff.
-- One logical change per PR where you can manage it.
-- Update the README if you change user-visible behaviour, and say so in the PR.
+- Short, imperative subject line: "Fix …", not "Fixed …".
+- Explain *why* in the body when the diff doesn't already say it.
+- One logical change per PR, where you can manage it.
+- If you change user-visible behaviour, update the README and mention it in the
+  PR.
 
-## Licensing of contributions
+## Licensing your contribution
 
-composemux is MIT licensed, and stays MIT: it is derived from Nx, which is MIT,
-and keeping a single permissive licence keeps the provenance unambiguous.
+composemux is MIT and stays MIT — it's derived from MIT-licensed code, and a
+single permissive licence keeps the provenance unambiguous.
 
-By submitting a contribution you agree that it is licensed under the MIT
-Licence, the same terms as the project ("inbound = outbound"). You keep the
-copyright in your own work; there is no CLA and no copyright assignment.
+By submitting a contribution you agree it's licensed under the MIT Licence, the
+same terms as the project ("inbound = outbound"). You keep the copyright in
+your own work; there's no CLA and no copyright assignment.
 
 Please sign off your commits to certify you have the right to submit them under
-that licence — this is the [Developer Certificate of Origin](https://developercertificate.org/):
+that licence — this is the
+[Developer Certificate of Origin](https://developercertificate.org/):
 
 ```sh
 git commit -s
@@ -129,7 +137,10 @@ git commit -s
 
 ## Reporting bugs
 
-Include your OS, `composemux --version`, `docker version`, and what the terminal
-was doing. For streaming or attachment problems, `COMPOSEMUX_DEBUG=1` writes
-diagnostics to `composemux.log` in your system temp directory — the UI can't log
-to stdout while it owns the screen.
+Include your OS, `composemux --version`, `docker version`, and what the
+terminal was doing at the time. For streaming or attachment problems,
+`COMPOSEMUX_DEBUG=1` writes diagnostics to `composemux.log` in your system temp
+directory — the UI can't log to stdout while it owns the screen.
+
+For security issues, don't open an issue: [SECURITY.md](SECURITY.md) has the
+private reporting route.

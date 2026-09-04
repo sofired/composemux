@@ -2,8 +2,9 @@
 
 **Why**
 
-<!-- If this changes behaviour that mirrors the Nx TUI, explain the divergence
-     and why it is justified. See CONTRIBUTING.md. -->
+<!-- Changes behaviour that mirrors the Nx TUI (keybindings, layout, colours)?
+     Explain the divergence and why it's justified — see "Before you change a
+     keybinding" in CONTRIBUTING.md. -->
 
 **Checklist**
 - [ ] `cargo test` passes
@@ -12,4 +13,4 @@
 - [ ] Tests cover the new behaviour
 - [ ] README updated if user-visible behaviour changed
 - [ ] Commits signed off (`git commit -s`)
-- [ ] Any code adapted from Nx or elsewhere is identified, with the upstream file named
+- [ ] Any code adapted from elsewhere is identified, with the upstream file named
