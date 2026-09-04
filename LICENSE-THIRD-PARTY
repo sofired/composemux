@@ -7,7 +7,7 @@ Modules derived from that code carry a header comment naming the upstream file.
 
 Nx is distributed under the MIT License, reproduced below.
 
-compose-tui is an independent project. It is not affiliated with, endorsed by,
+composemux is an independent project. It is not affiliated with, endorsed by,
 or sponsored by Nrwl / Narwhal Technologies Inc.
 
 --------------------------------------------------------------------------------
