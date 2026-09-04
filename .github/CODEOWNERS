@@ -14,9 +14,10 @@
 #
 #   1. Only accounts with write access count. Listing a read-only account
 #      silently does nothing.
-#   2. Humans only — either individuals or teams of humans. Never add a bot or an automation account, even one the
-#      project controls -- that hands the human approval back to a machine and
-#      reopens the gap this file exists to close.
+#   2. Humans only — either individuals or teams of humans. Never add a bot 
+#      or an automation account, even one the project controls -- that hands 
+#      the human approval back to a machine and reopens the gap this file 
+#      exists to close.
 #
 # When there is more than one maintainer, prefer a team over individuals
 # (`* @sofired/maintainers`), so people can be added or removed without a
