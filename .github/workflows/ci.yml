@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: every job here only reads the repo. Jobs needing more should
+# opt in individually rather than widening this.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
