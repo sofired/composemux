@@ -5,13 +5,15 @@ labels: enhancement
 ---
 
 **What problem does this solve?**
+<!-- What are you unable to do today, or doing awkwardly? -->
 
 **What would you like it to do?**
 
-**Does the Nx TUI do this?**
+**If this touches a keybinding, layout, or colour**
 <!--
-composemux deliberately mirrors the Nx terminal UI, so this matters. If Nx does
-it, say how. If it doesn't, explain why composemux should diverge — the usual
-justification is that compose services are long-running where Nx tasks are
-short. See "The one unusual rule" in CONTRIBUTING.md.
+composemux's interaction model is deliberately ported from the Nx terminal UI,
+so changes there need a reason beyond "this would be nicer" — see "Before you
+change a keybinding" in CONTRIBUTING.md. The usual justification is that
+compose services are long-running where Nx tasks are short. If that doesn't
+apply, say why the change is worth an exception anyway.
 -->
