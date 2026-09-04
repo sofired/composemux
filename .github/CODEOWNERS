@@ -1,0 +1,20 @@
+# Code owners for composemux.
+#
+# This file is one half of the "a human maintainer must approve" guard; the
+# other half is the "Require review from Code Owners" rule on the protected
+# branch. Neither works alone: without the rule this file only requests
+# reviews, and without this file the rule has nobody to require.
+#
+# It also closes a specific gap. Automated reviewers can submit an APPROVED
+# review, and a plain "require N approvals" rule counts it — so a bot alone can
+# satisfy the check. GitHub Apps cannot be listed as code owners, so requiring
+# a code owner's approval means a person has to sign off.
+#
+# Only accounts with write access count as code owners. Listing someone with
+# read access silently does nothing.
+#
+# When there is more than one maintainer, prefer a team over individuals
+# (`* @sofired/maintainers`), so people can be added or removed without a
+# commit here.
+
+* @scottescue
