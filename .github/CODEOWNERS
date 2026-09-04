@@ -14,7 +14,7 @@
 #
 #   1. Only accounts with write access count. Listing a read-only account
 #      silently does nothing.
-#   2. People only. Never add a bot or an automation account, even one the
+#   2. Humans only — either individuals or teams of humans. Never add a bot or an automation account, even one the
 #      project controls -- that hands the human approval back to a machine and
 #      reopens the gap this file exists to close.
 #
