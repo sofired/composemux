@@ -534,6 +534,88 @@ mod tests {
     }
 
     #[test]
+    /// Rendered rather than asserted on state: the point of the mode is what
+    /// reaches the frame, and only the frame can show the list and the sibling
+    /// are actually gone.
+    fn a_full_screen_pane_is_the_only_thing_on_the_frame() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        let lines = render_to_lines(&app, 160, 40);
+        let tops: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.contains('┏') || l.contains('┌') || l.contains('╭'))
+            .map(|(y, _)| y)
+            .collect();
+        assert_eq!(
+            tops.len(),
+            1,
+            "only the full-screen pane should be drawn:\n{lines:#?}"
+        );
+        let border_row = &lines[tops[0]];
+        assert_eq!(
+            border_row.find(['┏', '┌', '╭']).unwrap(),
+            0,
+            "the pane should start at column 0"
+        );
+        let text = lines.join("\n");
+        assert!(text.contains("api"), "got:\n{text}");
+        assert!(
+            !text.contains("worker"),
+            "the second pane and the list should be gone:\n{text}"
+        );
+    }
+
+    #[test]
+    /// Full screen is the first state in which an occupied pane goes
+    /// unrendered, so it stops being resized while it keeps ingesting. Shrink
+    /// the terminal meanwhile and its emulator is a size behind; only the
+    /// rebuild from raw bytes on the next resize puts that right.
+    fn a_pane_hidden_by_full_screen_rewraps_when_it_comes_back() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('2'));
+        let wide = Rect::new(0, 0, 200, 40);
+        let narrow = Rect::new(0, 0, 90, 40);
+        let resize = |app: &mut App, frame: Rect| {
+            let (_, sizes) = layout_for(app, frame);
+            app.resize_panes(&sizes);
+        };
+        resize(&mut app, wide);
+
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        resize(&mut app, wide);
+        assert!(
+            !render_to_text(&app, 200, 40).contains("worker"),
+            "the sibling pane should be off the frame while full screen"
+        );
+
+        // Output arrives, and the terminal shrinks, while the pane is hidden.
+        let long = "W".repeat(120);
+        app.ingest(
+            crate::tui::app::ServiceKey::new("worker", 1),
+            format!("{long}\n").as_bytes(),
+        );
+        resize(&mut app, narrow);
+
+        press(&mut app, KeyCode::Esc);
+        resize(&mut app, narrow);
+        let lines = render_to_lines(&app, 90, 40);
+        let rows = lines.iter().filter(|l| l.contains("WWW")).count();
+        assert!(
+            rows >= 2,
+            "the hidden pane's output should be back and rewrapped to the \
+             narrow frame, but it occupies {rows} row(s):\n{lines:#?}"
+        );
+    }
+
+    #[test]
     fn the_countdown_popup_summarises_the_exited_stack() {
         let cfg = Config::default();
         let mut app = App::new("demo", &cfg);

@@ -87,6 +87,13 @@ that's already in that pane unpins it, and pinning something sitting in the
 *other* pane moves it across rather than opening a second copy of the same
 logs.
 
+Full screen is a stronger version of `b`: hiding the list still leaves two
+pinned panes splitting the frame, whereas `enter` on a focused pane gives it
+everything. It's modal while it lasts — the keys that would put the list or the
+other pane back are ignored, and `enter` doesn't toggle back out — and `esc`
+restores the arrangement exactly as it was, hidden list included, without also
+giving up the pane. Press `esc` a second time for the service list.
+
 **In an output pane**
 
 | Key | Action |
@@ -95,7 +102,9 @@ logs.
 | `ctrl+u` / `ctrl+d` | Scroll half a page |
 | `Home` / `End` | Jump to the start or end |
 | `c` | Copy the buffer to the clipboard |
-| `esc` | Back to the service list |
+| `enter` | Full screen: this pane takes the frame, list and all |
+| `esc` | Leave full screen |
+| `esc` (again) | Back to the service list |
 
 **Anywhere:** `?` help · `q` quit · `ctrl+c` interrupt · `F10` toggle mouse
 capture.

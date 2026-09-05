@@ -25,6 +25,8 @@ pub const BINDINGS: &[(&str, &str)] = &[
     ("<esc>", "Clear filter"),
     ("", ""),
     ("<enter>", "Open and focus output for service"),
+    ("<enter>", "Full screen the focused output pane"),
+    ("<esc>", "Leave full screen"),
     ("<esc>", "Set focus back to service list"),
     ("<space>", "Quick toggle a single output pane"),
     ("b", "Toggle service list visibility"),
@@ -147,6 +149,24 @@ mod tests {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.starts_with("↑ or k"));
         assert!(text.ends_with("Up"));
+    }
+
+    #[test]
+    /// A binding users cannot discover is not shipped, and one with no
+    /// advertised way out is worse than absent.
+    fn the_full_screen_binding_and_its_exit_are_both_documented() {
+        assert!(
+            BINDINGS
+                .iter()
+                .any(|(k, d)| *k == "<enter>" && d.contains("Full screen")),
+            "the popup should list how to full screen a pane"
+        );
+        assert!(
+            BINDINGS
+                .iter()
+                .any(|(k, d)| *k == "<esc>" && d.contains("Leave full screen")),
+            "a binding with no advertised way out is a trap"
+        );
     }
 
     #[test]

@@ -78,6 +78,19 @@ impl ExitReason {
     }
 }
 
+/// A pane holding the whole frame, and the layout to put back when it lets go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FullScreen {
+    /// The pane slot holding the frame, not its position among the rendered
+    /// rects -- pinning to slot two alone leaves slot one empty.
+    pane: usize,
+    /// The split to put back on the way out, so leaving restores what the
+    /// user had rather than a default.
+    arrangement: PaneArrangement,
+    /// Whether the list was on before, so a list hidden with `b` stays hidden.
+    visibility: ListVisibility,
+}
+
 /// One row of the service list.
 #[derive(Debug, Clone)]
 pub struct Row {
@@ -101,6 +114,9 @@ pub struct App {
     focus: FocusStack,
     filter: Filter,
     layout: LayoutManager,
+    /// Set while one pane owns the whole frame; also the restore point, so
+    /// re-entering must not overwrite it.
+    full_screen: Option<FullScreen>,
     momentum: ScrollMomentum,
     throbber: usize,
     exit: Option<ExitReason>,
@@ -118,6 +134,7 @@ pub struct App {
 }
 
 impl App {
+    /// A fresh app for `project`, with nothing pinned and nothing full screen.
     pub fn new(project: impl Into<String>, config: &Config) -> Self {
         Self {
             project: project.into(),
@@ -132,6 +149,7 @@ impl App {
             focus: FocusStack::default(),
             filter: Filter::default(),
             layout: LayoutManager::default(),
+            full_screen: None,
             momentum: ScrollMomentum::default(),
             throbber: 0,
             exit: None,
@@ -174,6 +192,11 @@ impl App {
 
     pub fn layout(&self) -> &LayoutManager {
         &self.layout
+    }
+
+    /// The pane currently holding the whole frame, if any.
+    pub fn full_screen_pane(&self) -> Option<usize> {
+        self.full_screen.map(|f| f.pane)
     }
 
     pub fn throbber(&self) -> usize {
@@ -538,6 +561,43 @@ impl App {
         }
     }
 
+    /// `enter` on a focused pane, which nx's status bar calls "full screen".
+    ///
+    /// Nx gets there by swapping to a whole second view that renders one task
+    /// and nothing else. There is no second view here, so the layout does the
+    /// same job: this pane alone, with neither the list nor its sibling.
+    fn full_screen_focused_pane(&mut self) {
+        if self.full_screen.is_some() {
+            return;
+        }
+        let Some(idx) = self.focus.current().pane_index() else {
+            return;
+        };
+        // An empty slot would fill the frame with a pane that never draws.
+        if self.pane_key(idx).is_none() {
+            return;
+        }
+        self.full_screen = Some(FullScreen {
+            pane: idx,
+            arrangement: self.layout.arrangement(),
+            visibility: self.layout.visibility(),
+        });
+        self.layout.set_arrangement(PaneArrangement::Single);
+        self.layout.set_visibility(ListVisibility::Hidden);
+    }
+
+    /// Puts back the arrangement and list visibility full screen replaced.
+    /// Reports whether there was a full screen to leave, so `esc` can fall
+    /// through to its other meaning when there wasn't.
+    fn leave_full_screen(&mut self) -> bool {
+        let Some(saved) = self.full_screen.take() else {
+            return false;
+        };
+        self.layout.set_arrangement(saved.arrangement);
+        self.layout.set_visibility(saved.visibility);
+        true
+    }
+
     /// Pane slots holding a service, in order.
     ///
     /// The layout allocates one rect per occupied slot, so a renderer has to map
@@ -555,7 +615,13 @@ impl App {
         self.all.iter().find(|r| &r.key == key)
     }
 
+    /// The pane slots the layout should be asked to place.
     fn panes_with_content(&self) -> Vec<usize> {
+        // Full screen hides the sibling pane as well as the list, so the layout
+        // has to be asked for one rect rather than two.
+        if let Some(full) = self.full_screen {
+            return vec![full.pane];
+        }
         if self.spacebar_mode {
             return vec![0];
         }
@@ -772,12 +838,34 @@ impl App {
                     self.pending = Some(Action::CopyOutput);
                     return;
                 }
+                KeyCode::Enter => {
+                    self.full_screen_focused_pane();
+                    return;
+                }
                 KeyCode::Esc => {
-                    if self.layout.visibility() == ListVisibility::Visible {
+                    // Leaving full screen spends the press: nx returns from its
+                    // single-task view to the panes without also giving up the
+                    // focus that view was showing.
+                    if !self.leave_full_screen()
+                        && self.layout.visibility() == ListVisibility::Visible
+                    {
                         self.focus.set_base(Focus::ServiceList);
                     }
                     return;
                 }
+                // Full screen is modal upstream: nx's single-task view answers
+                // 1, 2, 0, space, b, m and tab with "This key is not handled by
+                // the TUI", so swallowing them keeps the keys that would put the
+                // list or a second pane back from contradicting the state the
+                // user asked for. Copy survives because nx keeps it too.
+                //
+                // Scrolling surviving is a deviation: nx's view has no scroll
+                // bindings at all, because it renders inline and leaves history
+                // to the host terminal's own scrollback. composemux owns the
+                // alternate screen, so a pane's history exists nowhere but its
+                // own buffer -- taking the frame to read more of it and then
+                // being unable to move would defeat the point of the binding.
+                _ if self.full_screen.is_some() => return,
                 _ => {}
             }
         }
@@ -1141,6 +1229,8 @@ mod tests {
     }
 
     #[test]
+    /// Focus cannot stay on a list that is no longer drawn, so `b` has to
+    /// move it somewhere -- the precondition the full-screen tests rely on.
     fn b_hides_the_list_and_moves_focus_to_a_pane() {
         let mut app = app_with(&["a"]);
         press(&mut app, KeyCode::Char('1'));
@@ -1149,6 +1239,272 @@ mod tests {
         assert_eq!(app.focus(), Focus::Pane(0));
         press(&mut app, KeyCode::Char('b'));
         assert_eq!(app.layout().visibility(), ListVisibility::Visible);
+    }
+
+    // ---- full screen ----
+
+    /// Two services pinned, focus on pane 1, which is where `tab` lands.
+    fn app_with_two_panes() -> App {
+        let mut app = app_with(&["a", "b"]);
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Tab);
+        app
+    }
+
+    #[test]
+    /// The binding itself: nx's `full screen: <enter>`, which here means one
+    /// pane, no list and no sibling.
+    fn enter_on_a_focused_pane_gives_it_the_whole_frame() {
+        let mut app = app_with_two_panes();
+        assert_eq!(app.focus(), Focus::Pane(0));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.layout().arrangement(), PaneArrangement::Single);
+        assert_eq!(app.layout().visibility(), ListVisibility::Hidden);
+        assert_eq!(
+            app.occupied_panes(),
+            vec![0],
+            "the other pane should go too, not just the list"
+        );
+        assert_eq!(app.focus(), Focus::Pane(0));
+    }
+
+    #[test]
+    /// Leaving restores the split that was there, not a default one -- a
+    /// two-pane layout has to come back as two panes.
+    fn escape_puts_back_the_arrangement_full_screen_replaced() {
+        let mut app = app_with_two_panes();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.layout().arrangement(), PaneArrangement::Double);
+        assert_eq!(app.layout().visibility(), ListVisibility::Visible);
+        assert_eq!(app.occupied_panes(), vec![0, 1]);
+        assert_eq!(
+            app.focus(),
+            Focus::Pane(0),
+            "leaving full screen is not leaving the pane"
+        );
+    }
+
+    #[test]
+    /// `esc` keeps its old meaning once full screen is gone: the first press
+    /// leaves the view, the second returns focus to the list.
+    fn a_second_escape_hands_focus_back_to_the_list() {
+        let mut app = app_with_two_panes();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(
+            app.focus(),
+            Focus::Pane(0),
+            "the first esc spends itself on the full screen"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus(), Focus::ServiceList);
+    }
+
+    #[test]
+    /// Restoring means putting back what the user had, not what the default
+    /// is: a list hidden with `b` stays hidden on the way out.
+    fn full_screen_restores_a_list_that_was_already_hidden() {
+        let mut app = app_with_two_panes();
+        press(&mut app, KeyCode::Char('b'));
+        assert_eq!(app.layout().visibility(), ListVisibility::Hidden);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.layout().arrangement(), PaneArrangement::Single);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.layout().arrangement(), PaneArrangement::Double);
+        assert_eq!(
+            app.layout().visibility(),
+            ListVisibility::Hidden,
+            "esc should restore what b left, not force the list back on"
+        );
+    }
+
+    #[test]
+    /// Slot two with slot one empty is where pane geometry has gone wrong
+    /// before (#14): the full-screen rect belongs to the pane's slot, not to
+    /// its position among the rects.
+    fn a_pane_pinned_only_to_slot_two_goes_full_screen_as_itself() {
+        let mut app = app_with(&["a", "b"]);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus(), Focus::Pane(1));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.layout().arrangement(), PaneArrangement::Single);
+        assert_eq!(app.layout().visibility(), ListVisibility::Hidden);
+        assert_eq!(
+            app.occupied_panes(),
+            vec![1],
+            "the frame belongs to the focused slot, not to slot 0"
+        );
+        assert_eq!(app.pane_key(1), Some(ServiceKey::new("b", 1)));
+    }
+
+    #[test]
+    /// The view is modal: anything that would put a second thing on the frame
+    /// has to be swallowed while it is up.
+    fn full_screen_ignores_the_keys_that_would_split_the_frame_again() {
+        // One press per app, so a failure names the key that got through.
+        // tab and shift+tab are here for the guarantee rather than the guard:
+        // with one occupied pane they would be no-ops even unswallowed.
+        for code in [
+            KeyCode::Char('1'),
+            KeyCode::Char('2'),
+            KeyCode::Char('0'),
+            KeyCode::Char(' '),
+            KeyCode::Char('b'),
+            KeyCode::Char('m'),
+            KeyCode::Tab,
+            KeyCode::BackTab,
+        ] {
+            let mut app = app_with_two_panes();
+            press(&mut app, KeyCode::Enter);
+            press(&mut app, code);
+            assert_eq!(
+                app.layout().arrangement(),
+                PaneArrangement::Single,
+                "{code:?} changed the arrangement"
+            );
+            assert_eq!(
+                app.layout().visibility(),
+                ListVisibility::Hidden,
+                "{code:?} put the service list back"
+            );
+            assert_eq!(app.occupied_panes(), vec![0], "{code:?} put a pane back");
+            assert_eq!(app.focus(), Focus::Pane(0), "{code:?} moved focus");
+            assert_eq!(
+                app.pane_key(1),
+                Some(ServiceKey::new("b", 1)),
+                "{code:?} disturbed the pin full screen is hiding"
+            );
+            assert!(
+                app.take_action().is_none(),
+                "{code:?} queued a deferred action"
+            );
+        }
+    }
+
+    #[test]
+    /// nx's single-task view is left with `esc`; `enter` is only the way in.
+    /// #9 asked for a toggle, and this is the deliberate divergence from it.
+    fn enter_does_not_leave_full_screen() {
+        let mut app = app_with_two_panes();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.layout().arrangement(), PaneArrangement::Single);
+        assert_eq!(app.layout().visibility(), ListVisibility::Hidden);
+        assert_eq!(app.occupied_panes(), vec![0]);
+    }
+
+    #[test]
+    /// Re-entering would save the full-screen layout as the thing to go back
+    /// to, stranding the user in it -- `esc` would restore what it already is.
+    fn a_second_enter_does_not_move_the_restore_point() {
+        let mut app = app_with_two_panes();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.layout().arrangement(), PaneArrangement::Double);
+        assert_eq!(app.layout().visibility(), ListVisibility::Visible);
+    }
+
+    #[test]
+    /// A spacebar pane follows the selection rather than a pin, so a stack
+    /// that empties out leaves the focused pane with nothing behind it, and
+    /// full-screening nothing would be a blank modal frame.
+    fn enter_is_inert_when_the_focused_pane_has_lost_its_service() {
+        let mut app = app_with(&["a"]);
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus(), Focus::Pane(0));
+        app.set_services(Vec::new());
+        assert_eq!(app.pane_key(0), None);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.full_screen_pane(),
+            None,
+            "a pane that cannot draw should not be handed the frame"
+        );
+        assert_eq!(app.layout().visibility(), ListVisibility::Visible);
+    }
+
+    #[test]
+    /// The countdown dismissal runs before the pane bindings, and an unhandled
+    /// key is meant to act as well as dismiss -- as it already does for `j`.
+    fn an_enter_that_dismisses_the_countdown_still_goes_full_screen() {
+        let cfg = Config::default();
+        let mut app = App::new("test", &cfg);
+        app.set_services(vec![svc("a", ServiceStatus::Success)]);
+        // Not via a keypress: any key marks the user present and cancels the
+        // countdown before it can start.
+        app.open_and_focus_selection();
+        assert_eq!(app.focus(), Focus::Pane(0));
+        app.tick(Instant::now());
+        assert_eq!(app.focus(), Focus::CountdownPopup);
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.focus(), Focus::Pane(0), "popup dismissed");
+        assert_eq!(app.full_screen_pane(), Some(0));
+    }
+
+    #[test]
+    /// The modality is about layout, not about disabling the pane: reading is
+    /// the reason to be here at all.
+    fn full_screen_still_scrolls_copies_and_quits() {
+        let mut app = app_with(&["a"]);
+        let key = ServiceKey::new("a", 1);
+        for i in 0..100 {
+            app.ingest(key.clone(), format!("line {i}\r\n").as_bytes());
+        }
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.layout().visibility(), ListVisibility::Hidden);
+        app.resize_panes(&[(0, 10, 40)]);
+        press_ctrl(&mut app, KeyCode::Char('u'));
+        assert_eq!(app.store(&key).unwrap().scroll_offset(), 12);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.take_action(), Some(Action::CopyOutput));
+        press(&mut app, KeyCode::Char('q'));
+        assert_eq!(app.exit_reason(), Some(ExitReason::Quit));
+    }
+
+    #[test]
+    /// Help is drawn over the view rather than replacing it, so dismissing it
+    /// returns to full screen instead of collapsing the layout.
+    fn help_opens_over_full_screen_and_leaves_it_intact() {
+        let mut app = app_with_two_panes();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('?'));
+        assert_eq!(app.focus(), Focus::HelpPopup);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(
+            app.focus(),
+            Focus::Pane(0),
+            "esc closed the popup, not the full screen under it"
+        );
+        assert_eq!(app.layout().visibility(), ListVisibility::Hidden);
+        assert_eq!(app.occupied_panes(), vec![0]);
+    }
+
+    #[test]
+    /// Spacebar mode has no pin to restore from, so the round trip has to work
+    /// off the follow-the-selection pane as well as a pinned one.
+    fn a_spacebar_pane_can_go_full_screen_and_come_back() {
+        let mut app = app_with(&["a", "b"]);
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus(), Focus::Pane(0));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.layout().visibility(), ListVisibility::Hidden);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.layout().visibility(), ListVisibility::Visible);
+        assert_eq!(
+            app.pane_key(0),
+            app.selected_key(),
+            "the pane should still be following the selection"
+        );
     }
 
     // ---- filter ----

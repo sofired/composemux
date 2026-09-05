@@ -24,9 +24,21 @@ pub const HEIGHT: u16 = 1;
 /// Right-hand key hints, in drop order: the leftmost goes first as space runs out.
 fn help_items(app: &App) -> Vec<(&'static str, &'static str)> {
     match app.focus() {
+        // The two labels are nx's own: "full screen: <enter>" on a focused
+        // pane, "exit: esc" once that pane has the frame. nx shows the exit
+        // hint on its own, but only because its full screen is a separate
+        // stripped-down app; here the rest of the row is still true.
+        Focus::Pane(_) if app.full_screen_pane().is_some() => vec![
+            ("scroll: ", "↑ ↓"),
+            ("copy: ", "c"),
+            ("exit: ", "esc"),
+            ("quit: ", "q"),
+            ("help: ", "?"),
+        ],
         Focus::Pane(_) => vec![
             ("scroll: ", "↑ ↓"),
             ("copy: ", "c"),
+            ("full screen: ", "<enter>"),
             ("quit: ", "q"),
             ("help: ", "?"),
         ],
@@ -218,6 +230,44 @@ mod tests {
         assert!(text.contains("scroll"));
         assert!(text.contains("copy"));
         assert!(!text.contains("pin output"));
+    }
+
+    #[test]
+    /// The status bar is where the binding is found in passing, so it has to
+    /// carry nx's wording rather than our own.
+    fn a_focused_pane_advertises_full_screen() {
+        let mut app = app_with(&["a"]);
+        app.open_and_focus_selection();
+        let text: String = help_line(&app, 200)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("full screen: <enter>"), "got: {text}");
+    }
+
+    #[test]
+    /// The bar follows the mode: once inside, the useful hint is how to leave.
+    fn a_full_screen_pane_advertises_the_way_out() {
+        let mut app = app_with(&["a"]);
+        app.open_and_focus_selection();
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            std::time::Instant::now(),
+        );
+        let text: String = help_line(&app, 200)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("exit: esc"), "got: {text}");
+        assert!(
+            !text.contains("full screen: <enter>"),
+            "the pane is already full screen: {text}"
+        );
     }
 
     #[test]
