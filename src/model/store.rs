@@ -364,6 +364,69 @@ mod tests {
         s
     }
 
+    /// The stream layer bounds how much one write carries, so output that
+    /// used to arrive in a single write can now arrive cut at an offset with
+    /// no relation to its content: mid escape sequence, between a `\r` and its
+    /// `\n`, inside a multi-byte character. That is only safe because the
+    /// emulator's parse state survives between writes, which is verified here
+    /// rather than assumed. The `pending_cr` carry needs its own test: a
+    /// duplicated `\r` is invisible to a terminal, so a broken carry would
+    /// slip past this comparison.
+    ///
+    /// Cutting every seven bytes is the harsher version of a 64 KiB cut: it
+    /// puts a seam inside every construct in the input instead of one seam
+    /// somewhere in it.
+    #[test]
+    fn output_renders_the_same_however_it_was_cut_up() {
+        let mut whole = LogStore::new(DEFAULT_SCROLLBACK);
+        whole.resize(10, 40);
+        let mut split = LogStore::new(DEFAULT_SCROLLBACK);
+        split.resize(10, 40);
+
+        let mut input = Vec::new();
+        for i in 0..200 {
+            let colour = 31 + i % 7;
+            input.extend_from_slice(format!("\x1b[{colour}mrow {i} k\u{e9}\r\n").as_bytes());
+        }
+
+        whole.process(&input);
+        for piece in input.chunks(7) {
+            split.process(piece);
+        }
+
+        // Formatted contents, not plain rows: a cut inside an SGR sequence
+        // loses the colour rather than the text, which plain rows would miss.
+        assert_eq!(
+            split.screen().contents_formatted(),
+            whole.screen().contents_formatted(),
+            "the pane renders differently when the output arrives cut up"
+        );
+        assert_eq!(split.all_text(), whole.all_text());
+    }
+
+    /// The `pending_cr` carry, which the comparison above cannot see: a `\r`
+    /// inserted twice moves the cursor to column zero twice, so a broken carry
+    /// is invisible in the rendered output of CRLF input. What it is not
+    /// invisible in is *bare* LF input, where a carry wrongly reported as set
+    /// suppresses the `\r` this normalisation exists to insert and the line
+    /// walks off to the right.
+    ///
+    /// Splitting a frame is what makes this reachable: container logs are
+    /// LF-terminated, so a cut at a piece boundary routinely leaves a bare
+    /// `\n` starting the next write.
+    #[test]
+    fn a_bare_newline_starting_a_write_still_returns_to_column_zero() {
+        let mut s = LogStore::new(DEFAULT_SCROLLBACK);
+        s.resize(6, 40);
+
+        // The cut lands between the line and its terminator, so the second
+        // write opens on the `\n` with no `\r` anywhere near it.
+        s.process(b"first line");
+        s.process(b"\nsecond line\n");
+
+        assert_eq!(non_empty(&s), ["first line", "second line"]);
+    }
+
     #[test]
     fn an_empty_write_is_not_output() {
         let mut s = LogStore::new(DEFAULT_SCROLLBACK);

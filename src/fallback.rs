@@ -4,6 +4,7 @@
 //! is useless (and would emit escape sequences into a log file). In that case we
 //! behave like `docker compose logs -f`: one prefixed line per log line.
 
+use crate::docker::stream::MAX_CHUNK_BYTES;
 use crate::docker::{DockerClient, LogSupervisor, SourceEvent};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -20,12 +21,23 @@ use unicode_width::UnicodeWidthStr;
 /// and wrapper scripts, so growing without bound here fails where nobody is
 /// watching.
 ///
-/// It bounds accumulation *across* chunks, not any single one. By the time
-/// [`LineAssembler::push`] sees a chunk the daemon's frame has already been
-/// allocated upstream, so clamping here would cost a copy without avoiding
-/// the spike -- and a chunk larger than this before its first newline is
-/// still emitted whole. See #31, which tracks bounding it at the read site.
+/// It bounds accumulation *across* chunks, not any single one. That is only a
+/// bound at all because the chunks themselves are bounded where they are read,
+/// by `MAX_CHUNK_BYTES` in the Docker layer, and by a good deal less than this.
+/// A run this long therefore always arrives in several chunks and is flushed
+/// here, rather than turning up whole in one chunk and defeating the cap.
 const MAX_PARTIAL: usize = 1024 * 1024;
+
+/// Keeping a forwarded piece under this cap is what bounds the buffer itself.
+/// `push` appends whatever it is handed before the cap is consulted, so the
+/// buffer peaks at this cap plus one piece; a piece smaller than the cap keeps
+/// that peak under twice it. Tuning the two apart is a build error rather than
+/// a quiet doubling.
+///
+/// It is *not* what keeps whole lines whole -- a line is emitted whole as long
+/// as its newline arrives before the bytes held for it pass the cap, which no
+/// chunk size can change for a line that fits the cap in the first place.
+const _: () = assert!(MAX_CHUNK_BYTES < MAX_PARTIAL);
 
 /// Buffers partial lines so a chunk boundary never splits output mid-line.
 #[derive(Default)]
@@ -58,9 +70,10 @@ impl LineAssembler {
         // printed early is a far better failure than memory climbing until the
         // process dies. A cut can land mid-character, which `from_utf8_lossy`
         // renders as a replacement -- acceptable for output that has already
-        // run a megabyte without a newline. A line that *does* terminate is
-        // still emitted whole however long it is, since splitting real lines
-        // would corrupt them for whatever is parsing the log.
+        // run a megabyte without a newline. A line whose newline arrives while
+        // it is still held is emitted whole however long it runs, since
+        // splitting real lines would corrupt them for whatever is parsing the
+        // log; only a run that passes the cap before any newline gets cut.
         while self.partial.len() + rest.len() > MAX_PARTIAL {
             let room = MAX_PARTIAL - self.partial.len();
             self.partial.extend_from_slice(&rest[..room]);
@@ -357,6 +370,71 @@ mod tests {
         );
         // The column is six wide now, so a two-column name takes four spaces.
         assert_eq!(p.format("ab"), "ab      | ");
+    }
+
+    /// The stream layer now hands this path a long line in `MAX_CHUNK_BYTES`
+    /// pieces where it used to hand it over whole. Anything under the
+    /// assembler's own cap has to come back out as one line regardless, or the
+    /// bound at the read site would have changed what gets printed.
+    #[test]
+    fn a_line_arriving_in_forwarded_pieces_still_prints_whole() {
+        let mut a = LineAssembler::default();
+        // The largest line the buffer is guaranteed to hold, so this exercises
+        // the whole of it rather than a comfortable middle. Multi-byte
+        // throughout, so the cuts land mid-character -- `from_utf8_lossy` runs
+        // on the reassembled buffer, so a cut there must not corrupt anything.
+        let unit = "h\u{e9}llo\u{b7}w\u{f6}rld ";
+        let body: String = std::iter::repeat_n(unit, MAX_PARTIAL / unit.len()).collect();
+        assert!(
+            body.len() > MAX_CHUNK_BYTES,
+            "the line has to span more than one forwarded piece to test anything"
+        );
+        let mut input = body.clone().into_bytes();
+        input.extend_from_slice(b"\r\n");
+
+        let mut lines = Vec::new();
+        for piece in input.chunks(MAX_CHUNK_BYTES) {
+            lines.extend(a.push(piece));
+        }
+
+        assert_eq!(lines, vec![body], "the split changed what is printed");
+        assert!(a.partial.is_empty(), "held {} bytes back", a.partial.len());
+    }
+
+    /// Where the split does change what is printed, pinned exactly.
+    ///
+    /// A terminated line survives whole while the bytes held for it stay
+    /// within the cap when each piece lands, so the boundary sits past the cap
+    /// rather than on it. Beyond it the line is cut, which is the behaviour
+    /// bounding the frame gives up: a line that long used to be printed whole
+    /// when the daemon happened to deliver it in one frame, and is now cut
+    /// whichever way it arrives.
+    ///
+    /// The numbers below are the current constants', where a piece divides the
+    /// cap exactly and the boundary lands on `MAX_PARTIAL + MAX_CHUNK_BYTES`.
+    /// A piece size that does not divide the cap moves it, because the run
+    /// then overshoots mid-piece instead of landing on the cap, so retuning
+    /// the bound means recomputing this rather than assuming the sum holds.
+    #[test]
+    fn a_terminated_line_survives_until_the_cap_plus_one_piece() {
+        fn pieces_for(len: usize) -> Vec<String> {
+            let mut a = LineAssembler::default();
+            let mut input = vec![b'x'; len];
+            input.push(b'\n');
+            let mut lines = Vec::new();
+            for piece in input.chunks(MAX_CHUNK_BYTES) {
+                lines.extend(a.push(piece));
+            }
+            lines
+        }
+
+        let whole = pieces_for(MAX_PARTIAL + MAX_CHUNK_BYTES - 1);
+        assert_eq!(whole.len(), 1, "cut a line that still fits");
+        assert_eq!(whole[0].len(), MAX_PARTIAL + MAX_CHUNK_BYTES - 1);
+
+        let cut = pieces_for(MAX_PARTIAL + MAX_CHUNK_BYTES);
+        assert_eq!(cut.len(), 2, "kept a line past the point it can be held");
+        assert_eq!(cut[0].len(), MAX_PARTIAL);
     }
 
     #[test]

@@ -25,6 +25,34 @@ const EVENT_RECONNECT_DELAY: Duration = Duration::from_secs(2);
 /// event was missed entirely.
 const RESYNC_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Largest slice of one log frame carried by a single [`SourceEvent::Output`].
+///
+/// The size of a frame is the daemon's decision, not ours, and bollard hands
+/// one back already allocated -- that allocation is not something this code
+/// can prevent. What it can prevent is the frame being multiplied: copied
+/// whole into an event, queued in a 4096-slot channel, and copied again by a
+/// consumer that bounds only what it *retains* (`MAX_PARTIAL` in the fallback
+/// assembler, `MAX_RAW_BYTES` in `LogStore`). Splitting here is what makes
+/// everything downstream of the frame finite, and lets the frame itself be
+/// freed at the end of the iteration.
+///
+/// How big a frame gets depends on the service, and there are two cases.
+/// Without a tty the daemon multiplexes the stream through stdcopy framing
+/// and its log copier splits a message at 16 KiB: a 5 MB line containing no
+/// newline at all comes back as 306 frames, none over 16384 bytes, on both
+/// the json-file and local drivers. Those never reach this bound. With
+/// `tty: true` there is no framing at all -- the same 5 MB arrives as one
+/// unbroken body -- and bollard's decoder cuts it at newlines instead,
+/// yielding a whole line per frame however long the line is. That is the case
+/// this bound exists for, and the case where it actually fires. It buffers
+/// that unframed stream until it finds a newline, which #38 tracks.
+///
+/// 64 KiB is four times the daemon's own 16 KiB message split, so the common
+/// path keeps costing exactly one copy per frame, and it holds the most the
+/// 4096-slot channel can carry to about 256 MiB, where before a single slot
+/// was unbounded.
+pub(crate) const MAX_CHUNK_BYTES: usize = 64 * 1024;
+
 /// A message from the Docker layer to the UI.
 #[derive(Debug)]
 pub enum SourceEvent {
@@ -387,25 +415,42 @@ async fn stream_container(
                 let Some(chunk) = next else { return Ok(()) };
                 // stdout and stderr both land in the same emulator, exactly as
                 // they would in a terminal attached to the container.
-                let bytes = chunk?.into_bytes().to_vec();
-                if bytes.is_empty() {
-                    continue;
-                }
-                if tx
-                    .send(SourceEvent::Output {
-                        service: desc.service.clone(),
-                        replica: desc.replica,
-                        bytes,
-                    })
-                    .await
-                    .is_err()
-                {
+                if !forward_frame(tx, desc, &chunk?.into_bytes()).await {
                     // Receiver is gone; the UI has shut down.
                     return Ok(());
                 }
             }
         }
     }
+}
+
+/// Sends one frame downstream in pieces no larger than [`MAX_CHUNK_BYTES`],
+/// returning `false` once the receiver has gone away.
+///
+/// Cutting at a fixed offset is safe because both consumers are stateful
+/// across writes: the fallback assembler holds a partial line until its
+/// newline arrives, and `LogStore` carries a pending `\r` and its emulator's
+/// parse state between writes. A cut mid-line, mid-CRLF, mid-escape or
+/// mid-character therefore reads the same as no cut at all, so there is
+/// nothing to gain by preferring to cut at a newline.
+///
+/// An empty frame yields no pieces, which is why there is no explicit guard
+/// for one: forwarding it would replace a pane's "waiting" placeholder with a
+/// blank pane.
+async fn forward_frame(tx: &mpsc::Sender<SourceEvent>, desc: &ContainerDesc, frame: &[u8]) -> bool {
+    for piece in frame.chunks(MAX_CHUNK_BYTES) {
+        let sent = tx
+            .send(SourceEvent::Output {
+                service: desc.service.clone(),
+                replica: desc.replica,
+                bytes: piece.to_vec(),
+            })
+            .await;
+        if sent.is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 fn now_seconds() -> i64 {
@@ -457,6 +502,107 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Drains everything queued, checking each event still carries the identity
+    /// of the container it came from.
+    fn drain(rx: &mut mpsc::Receiver<SourceEvent>) -> Vec<Vec<u8>> {
+        let mut pieces = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                SourceEvent::Output {
+                    service,
+                    replica,
+                    bytes,
+                } => {
+                    assert_eq!(service, "svc-a", "a piece lost its service");
+                    assert_eq!(replica, 1, "a piece lost its replica");
+                    pieces.push(bytes);
+                }
+                other => panic!("expected output, got {other:?}"),
+            }
+        }
+        pieces
+    }
+
+    /// The bound the daemon does not give us. Nothing upstream limits how much
+    /// one frame contains, and one event used to carry all of it: into a
+    /// 4096-slot channel, then into a consumer that bounds only what it keeps.
+    #[tokio::test]
+    async fn an_oversized_frame_is_forwarded_in_bounded_pieces() {
+        let (tx, mut rx) = mpsc::channel(64);
+        // Non-uniform, so reassembly is checked byte for byte rather than by
+        // length alone; the remainder makes the last piece a short one.
+        let size = 4 * MAX_CHUNK_BYTES + 7;
+        let frame: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+
+        assert!(forward_frame(&tx, &desc("a", true), &frame).await);
+
+        let pieces = drain(&mut rx);
+        for piece in &pieces {
+            assert!(
+                piece.len() <= MAX_CHUNK_BYTES,
+                "forwarded {} bytes in one event, past the {MAX_CHUNK_BYTES}-byte bound",
+                piece.len()
+            );
+        }
+        assert_eq!(pieces.len(), 5, "expected the frame to be cut into pieces");
+        let back: Vec<u8> = pieces.concat();
+        assert!(back == frame, "the pieces do not reassemble to the frame");
+    }
+
+    /// Real Docker output arrives well under the bound, so the common path
+    /// must be exactly what it was: one frame, one event, one copy.
+    #[tokio::test]
+    async fn a_frame_at_the_bound_is_forwarded_in_one_piece() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let frame = vec![b'x'; MAX_CHUNK_BYTES];
+
+        assert!(forward_frame(&tx, &desc("a", true), &frame).await);
+
+        let pieces = drain(&mut rx);
+        assert_eq!(pieces.len(), 1, "a frame at the bound should not be split");
+        assert_eq!(pieces[0].len(), MAX_CHUNK_BYTES);
+    }
+
+    /// The other side of the boundary, where an off-by-one would live.
+    #[tokio::test]
+    async fn one_byte_past_the_bound_is_split() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let frame = vec![b'x'; MAX_CHUNK_BYTES + 1];
+
+        assert!(forward_frame(&tx, &desc("a", true), &frame).await);
+
+        let pieces = drain(&mut rx);
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].len(), MAX_CHUNK_BYTES);
+        assert_eq!(pieces[1].len(), 1);
+    }
+
+    /// An empty frame must stay unsent: `LogStore` treats any write as output,
+    /// so forwarding one would replace a pane's "waiting" placeholder with a
+    /// blank pane.
+    #[tokio::test]
+    async fn an_empty_frame_is_not_forwarded() {
+        let (tx, mut rx) = mpsc::channel(8);
+
+        assert!(forward_frame(&tx, &desc("a", true), b"").await);
+
+        assert!(drain(&mut rx).is_empty(), "an empty frame was forwarded");
+    }
+
+    /// A departed receiver has to be reported, so the reading loop stops
+    /// rather than draining the rest of the container's log into a channel
+    /// nobody is holding.
+    #[tokio::test]
+    async fn forwarding_reports_a_departed_receiver() {
+        let (tx, rx) = mpsc::channel::<SourceEvent>(8);
+        drop(rx);
+
+        assert!(
+            !forward_frame(&tx, &desc("a", true), b"anything").await,
+            "the caller must be told to stop reading"
+        );
     }
 
     #[test]
