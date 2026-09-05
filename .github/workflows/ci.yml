@@ -34,6 +34,24 @@ jobs:
       # The clipboard fallback is optional; make sure it still builds without it.
       - run: cargo build --no-default-features
 
+  docstrings:
+    name: docstrings
+    runs-on: ubuntu-latest
+    # Only meaningful against a base branch: the check is scoped to the
+    # functions a change touches, not the whole tree.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The check diffs against the base branch, so it needs the history.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 scripts/test_check_docstrings.py
+      - run: scripts/check-docstrings.py "origin/${{ github.base_ref }}"
+
   release-build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

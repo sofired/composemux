@@ -77,6 +77,33 @@ cargo test
 cargo build --no-default-features   # clipboard fallback is optional
 ```
 
+One more runs on pull requests, on Ubuntu only, and is worth running before you
+push:
+
+```sh
+scripts/check-docstrings.py         # declarations you touched need doc comments
+```
+
+## Docstrings
+
+Declarations you add or change need a doc comment, and CI fails a change that
+leaves one without. Run it yourself before pushing:
+
+```sh
+scripts/check-docstrings.py
+```
+
+Detection is clippy's own `missing_docs_in_private_items`, so it sees every
+kind of declaration -- fields, constants and structs as well as functions --
+and sees them the way the compiler does rather than through a regex. The
+scoping is ours: the lint fires 246 times across the tree, so a run fails only
+for declarations your change touched, and the rule applies to what you are
+writing instead of turning into a project-wide documentation sprint.
+
+Write why the function exists, not what its body does -- and only what is true
+of it. An out-of-date comment is treated as a defect here, not a tidiness
+issue, so an accurate short line beats a thorough stale one.
+
 ## Tests
 
 The suite is the safety net that makes a port maintainable: it's what stops an
