@@ -8,7 +8,7 @@ up, one that draws progress bars, one that exits 42 when you ask it to, one
 that says almost nothing — so every column in the service list has something in
 it and every feature has something to demonstrate.
 
-Nothing is stateful. `./demo down` leaves no volumes, no images to clean up,
+Nothing is stateful. `./stack down` leaves no volumes, no images to clean up,
 and nothing on disk.
 
 ## Requirements
@@ -34,7 +34,7 @@ cargo build --release --manifest-path ../Cargo.toml
 Two terminals, side by side.
 
 ```bash
-./demo up
+./stack up
 ```
 
 ```bash
@@ -44,7 +44,7 @@ composemux
 Then, back in the first terminal:
 
 ```bash
-./demo chaos
+./stack chaos
 ```
 
 `chaos` runs continuous traffic and fires a random event every twenty seconds —
@@ -67,7 +67,7 @@ available as a single command, which is what the tour below uses.
 | `reporter` | python | Behind a profile, so it can arrive after composemux has attached |
 
 The services talk through `./state`, a bind mount. The activity script drops
-flag files in there and the services notice — which is why `./demo unhealthy`
+flag files in there and the services notice — which is why `./stack unhealthy`
 takes effect without restarting anything.
 
 ## The tour
@@ -91,7 +91,7 @@ service list with `api` and `worker` already pinned — that pairing comes from
 Press `1` on `gateway` and `2` on `api`, then:
 
 ```bash
-./demo traffic 30 4
+./stack traffic 30 4
 ```
 
 Every request appears twice — once as an nginx access line, once as the api's
@@ -102,7 +102,7 @@ own coloured log. That is the case for two panes in one sentence.
 Pin `worker` and queue some jobs:
 
 ```bash
-./demo jobs 8
+./stack jobs 8
 ```
 
 Each job draws a percentage bar that redraws in place with `\r`. Roughly one in
@@ -113,7 +113,7 @@ and the trace keeps its shape.
 Then hit the api directly:
 
 ```bash
-./demo errors 3
+./stack errors 3
 ```
 
 Focus the pane with `tab`, scroll with `k`/`j` or `ctrl+u`/`ctrl+d`, `Home` and
@@ -123,7 +123,7 @@ exactly as it was.
 ### A scrolled pane stays where you put it
 
 ```bash
-./demo stress 20
+./stack stress 20
 ```
 
 The worker floods stdout. Scroll up mid-flood and the view holds its position
@@ -137,17 +137,17 @@ of the scrollback buffer, which [`.composemux.yaml`](.composemux.yaml) sets to
 five:
 
 ```bash
-./demo unhealthy      # health column turns to fail within ~10s
-./demo healthy        # and back
+./stack unhealthy      # health column turns to fail within ~10s
+./stack healthy        # and back
 
-./demo crash          # flaky exits 42 - the exit code shows in the row
-./demo revive         # back under a new container ID, reattached automatically
+./stack crash          # flaky exits 42 - the exit code shows in the row
+./stack revive         # back under a new container ID, reattached automatically
 
-./demo pause          # cache -> paused
-./demo unpause
+./stack pause          # cache -> paused
+./stack unpause
 
-./demo create-reporter   # created but not started
-./demo start-reporter    # and now running
+./stack create-reporter   # created but not started
+./stack start-reporter    # and now running
 ```
 
 `create-reporter` is worth doing with composemux already open: the row appears
@@ -157,17 +157,17 @@ rather than polling a fixed list.
 ### Replicas
 
 ```bash
-./demo scale 3
+./stack scale 3
 ```
 
 Three `worker` rows, each with its own log buffer. They share a job queue, so
 watch them race for jobs:
 
 ```bash
-./demo jobs 12
+./stack jobs 12
 ```
 
-Back to one with `./demo scale 1`.
+Back to one with `./stack scale 1`.
 
 ### Finding things
 
@@ -190,7 +190,7 @@ written into a log file.
 ### Shutting down
 
 ```bash
-./demo wind-down
+./stack wind-down
 ```
 
 Every service exits 0 — including postgres, redis and nginx — so composemux
@@ -200,7 +200,7 @@ stack down after it. Any keypress cancels the countdown.
 Now the other half of that behaviour:
 
 ```bash
-./demo up && ./demo crash && ./demo wind-down
+./stack up && ./stack crash && ./stack wind-down
 ```
 
 One service exited non-zero, so there is no countdown at all. Everything has
@@ -210,7 +210,7 @@ worst possible time for the log viewer to disappear.
 ### Clean up
 
 ```bash
-./demo down
+./stack down
 ```
 
 ## Recording the README demo
@@ -225,7 +225,7 @@ second terminal on a timer rather than from anything visible on camera.
 
 ```bash
 # terminal A
-./demo up && ./record-drive
+./stack up && ./record-drive
 ```
 
 ```bash
@@ -293,7 +293,7 @@ until the job finished.
 
 **SIGTERM handled explicitly.** Without a handler, Python dies on the default
 disposition and Docker records exit 143, which is a failure. Handling it and
-exiting 0 is what makes `./demo wind-down` produce a clean stack rather than
+exiting 0 is what makes `./stack wind-down` produce a clean stack rather than
 nine failed services.
 
 **Short healthcheck intervals.** Five seconds with two retries, rather than the

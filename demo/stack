@@ -5,7 +5,7 @@
 # changes anything. This script is the other half - it owns the lifecycle and
 # makes things happen, so you can watch composemux react.
 #
-# Run `./demo help` for the list.
+# Run `./stack help` for the list.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -147,7 +147,7 @@ cmd_crash() {
     n=$((n + 1)); sleep 1
   done
   rm -f "$FLAGS/crash"
-  say "flaky exited. the sidebar shows the exit code; ${bold}./demo revive${reset} brings it back."
+  say "flaky exited. the sidebar shows the exit code; ${bold}./stack revive${reset} brings it back."
 }
 
 cmd_revive() {
@@ -236,7 +236,7 @@ cmd_chaos() {
 
 cmd_help() {
   cat <<'TXT'
-Usage: ./demo <command> [args]
+Usage: ./stack <command> [args]
 
 Lifecycle
   up                     start the stack and wait for it to be healthy
@@ -290,5 +290,5 @@ case "${1:-help}" in
   wind-down)       shift; cmd_wind_down "$@" ;;
   chaos)           shift; cmd_chaos "$@" ;;
   help|-h|--help)  cmd_help ;;
-  *) die "unknown command: $1 (try ./demo help)" ;;
+  *) die "unknown command: $1 (try ./stack help)" ;;
 esac

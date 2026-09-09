@@ -69,7 +69,7 @@ services:
     <<: *py
     command: python metrics.py
 
-  # Stays up until `./demo crash`, then exits 42.
+  # Stays up until `./stack crash`, then exits 42.
   flaky:
     <<: *py
     command: python flaky.py

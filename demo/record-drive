@@ -16,7 +16,7 @@ RUN=${1:-56}   # length of the take, seconds
 at() { local t=$1; shift; ( sleep "$t"; "$@" >/dev/null 2>&1 ) & }
 
 printf 'stack check... '
-./demo status >/dev/null 2>&1 || { echo "run ./demo up first"; exit 1; }
+./stack status >/dev/null 2>&1 || { echo "run ./stack up first"; exit 1; }
 echo ok
 
 for i in 3 2 1; do printf '%s ' "$i"; sleep 1; done
@@ -32,11 +32,11 @@ echo "go"
 TRAFFIC=$!
 trap 'kill "${TRAFFIC:-}" 2>/dev/null || true' EXIT INT TERM
 
-at 22 ./demo jobs 3     # progress bar is redrawing by 0:24
-at 32 ./demo errors 1   # traceback lands around 0:33
-at 40 ./demo crash      # flaky takes 1-5s to notice, red row by ~0:45
+at 22 ./stack jobs 3     # progress bar is redrawing by 0:24
+at 32 ./stack errors 1   # traceback lands around 0:33
+at 40 ./stack crash      # flaky takes 1-5s to notice, red row by ~0:45
 
 sleep "$RUN"
 kill "$TRAFFIC" 2>/dev/null || true
 trap - EXIT INT TERM
-echo "take over - ./demo revive to reset flaky"
+echo "take over - ./stack revive to reset flaky"

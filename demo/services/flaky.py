@@ -1,7 +1,7 @@
 """A service that stays up until you ask it not to.
 
-`./demo crash` drops a flag file and this exits 42, so the sidebar shows a
-failed service with a real exit code. `./demo revive` brings it back under a
+`./stack crash` drops a flag file and this exits 42, so the sidebar shows a
+failed service with a real exit code. `./stack revive` brings it back under a
 new container ID, which is the reattach path.
 """
 

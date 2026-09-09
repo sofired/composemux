@@ -8,7 +8,7 @@ project: composemux-demo
 pinned: [api, worker]
 
 tail: 200          # lines of history loaded per service before following
-scrollback: 2000   # rows retained per service - raise it before `./demo stress`
+scrollback: 2000   # rows retained per service - raise it before `./stack stress`
 auto_exit: 3       # seconds to count down once everything has exited cleanly
 
 # Try these too:
