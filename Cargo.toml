@@ -9,6 +9,9 @@ repository = "https://github.com/sofired/composemux"
 readme = "README.md"
 keywords = ["docker", "compose", "tui", "logs", "ratatui"]
 categories = ["command-line-utilities", "development-tools"]
+# The demo stack under demo/ exists to record the README demo against.
+# It is not part of the library and has no business in the crate tarball.
+exclude = ["demo/"]
 
 [dependencies]
 ratatui = "0.30.2"

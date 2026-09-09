@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+# Activity generator for the composemux demo stack.
+#
+# composemux is read-only: it attaches to containers and never starts, stops or
+# changes anything. This script is the other half - it owns the lifecycle and
+# makes things happen, so you can watch composemux react.
+#
+# Run `./demo help` for the list.
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+BASE=${BASE:-http://localhost:8099}
+TRAFFIC_PID=""
+DC="docker compose"
+FLAGS=state/flags
+
+bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; yellow=$'\033[33m'
+cyan=$'\033[36m'; red=$'\033[31m'; reset=$'\033[0m'
+
+say()  { printf '%s==>%s %s\n' "$cyan$bold" "$reset" "$*"; }
+warn() { printf '%s==>%s %s\n' "$yellow$bold" "$reset" "$*"; }
+die()  { printf '%serror:%s %s\n' "$red$bold" "$reset" "$*" >&2; exit 1; }
+
+need_curl() { command -v curl >/dev/null || die "curl not found on PATH"; }
+
+# One request, output discarded. Failures are ignored on purpose: half the
+# point is to generate 4xx and 5xx.
+hit() { curl -s -o /dev/null -m 10 "$BASE$1" || true; }
+
+PATHS=(/ /orders /users/42 /search?q=widgets /orders/9912 /404 /health-ui /cart)
+
+random_path() { echo "${PATHS[$((RANDOM % ${#PATHS[@]}))]}"; }
+
+wait_for_gateway() {
+  need_curl
+  local n=0
+  until curl -sf -m 2 "$BASE/healthz" >/dev/null 2>&1; do
+    n=$((n + 1)); [ "$n" -gt 60 ] && die "gateway not answering at $BASE"
+    sleep 1
+  done
+}
+
+cmd_up() {
+  say "starting the stack"
+  mkdir -p "$FLAGS" state/jobs
+  rm -f "$FLAGS"/* state/jobs/* 2>/dev/null || true
+  # Drop any reporter left over from a previous run, so `create-reporter` still
+  # has a service that composemux has never seen.
+  $DC --profile extra rm -sf reporter >/dev/null 2>&1 || true
+  $DC up -d --wait --wait-timeout 120 || true
+  wait_for_gateway
+  say "up. now run ${bold}composemux${reset} in another terminal, then come back here."
+}
+
+cmd_down() {
+  say "tearing down"
+  $DC --profile extra down --remove-orphans -v
+  rm -f "$FLAGS"/* state/jobs/* 2>/dev/null || true
+}
+
+cmd_status() { $DC --profile extra ps -a; }
+
+# --- traffic -----------------------------------------------------------------
+
+cmd_traffic() {
+  local secs=${1:-60} rps=${2:-4}
+  need_curl
+  say "steady traffic for ${secs}s at ~${rps}/s ${dim}(ctrl-c to stop)${reset}"
+  local delay end
+  delay=$(awk "BEGIN{print 1/$rps}")
+  end=$(( $(date +%s) + secs ))
+  while [ "$(date +%s)" -lt "$end" ]; do
+    hit "$(random_path)" &
+    sleep "$delay"
+  done
+  wait
+  say "traffic done"
+}
+
+cmd_burst() {
+  local n=${1:-40}
+  need_curl
+  say "burst of $n concurrent requests"
+  local i=0
+  while [ "$i" -lt "$n" ]; do hit "$(random_path)" & i=$((i + 1)); done
+  wait
+  say "burst done"
+}
+
+cmd_jobs() {
+  local n=${1:-6}
+  need_curl
+  say "queueing $n worker jobs ${dim}(watch the worker pane for progress bars)${reset}"
+  local i=0
+  while [ "$i" -lt "$n" ]; do hit /jobs; i=$((i + 1)); sleep 0.3; done
+  say "queued. some of them will fail with a stack trace - that is deliberate."
+}
+
+cmd_errors() {
+  local n=${1:-3}
+  need_curl
+  say "triggering $n server errors ${dim}(deep tracebacks in the api pane)${reset}"
+  local i=0
+  while [ "$i" -lt "$n" ]; do hit /boom; i=$((i + 1)); sleep 0.8; done
+}
+
+cmd_slow() {
+  local n=${1:-4}
+  need_curl
+  say "$n slow requests"
+  local i=0
+  while [ "$i" -lt "$n" ]; do hit /slow & i=$((i + 1)); sleep 0.2; done
+  wait
+}
+
+cmd_stress() {
+  local secs=${1:-15}
+  say "flooding the worker for ${secs}s"
+  say "${dim}scroll up in the worker pane while this runs - the view holds its position${reset}"
+  mkdir -p "$FLAGS"; : > "$FLAGS/stress"
+  sleep "$secs"
+  rm -f "$FLAGS/stress"
+  say "stress released"
+}
+
+# --- status transitions ------------------------------------------------------
+
+cmd_unhealthy() {
+  mkdir -p "$FLAGS"; : > "$FLAGS/unhealthy"
+  warn "api health endpoint now failing - the health column turns ${red}fail${reset} within ~10s"
+}
+
+cmd_healthy() {
+  rm -f "$FLAGS/unhealthy"
+  say "api health restored - back to ${green}ok${reset}"
+}
+
+cmd_crash() {
+  mkdir -p "$FLAGS"; : > "$FLAGS/crash"
+  warn "telling flaky to die with exit 42"
+  local n=0
+  while [ "$n" -lt 15 ]; do
+    case "$($DC ps -a --format '{{.State}}' flaky 2>/dev/null)" in
+      exited|dead) break ;;
+    esac
+    n=$((n + 1)); sleep 1
+  done
+  rm -f "$FLAGS/crash"
+  say "flaky exited. the sidebar shows the exit code; ${bold}./demo revive${reset} brings it back."
+}
+
+cmd_revive() {
+  rm -f "$FLAGS/crash"
+  say "restarting flaky - it comes back under a new container ID and composemux reattaches"
+  $DC up -d --no-deps flaky
+}
+
+cmd_pause() {
+  local svc=${1:-cache}
+  warn "pausing $svc"
+  $DC pause "$svc"
+}
+
+cmd_unpause() {
+  local svc=${1:-cache}
+  say "unpausing $svc"
+  $DC unpause "$svc"
+}
+
+cmd_scale() {
+  local n=${1:-3}
+  say "scaling worker to $n replicas"
+  $DC up -d --no-deps --scale "worker=$n" worker
+  say "each replica gets its own row and its own log buffer"
+}
+
+cmd_restart() {
+  local svc=${1:-api}
+  say "restarting $svc - new container ID, composemux picks it back up"
+  $DC restart "$svc"
+}
+
+cmd_create_reporter() {
+  say "creating reporter without starting it"
+  $DC --profile extra create reporter
+  say "it appears in the sidebar as ${dim}not started${reset}"
+}
+
+cmd_start_reporter() {
+  say "starting reporter"
+  $DC --profile extra start reporter
+}
+
+cmd_wind_down() {
+  say "stopping every service cleanly"
+  say "${dim}all exit 0, so composemux starts its auto-exit countdown${reset}"
+  $DC --profile extra stop
+}
+
+# --- hands-free --------------------------------------------------------------
+
+cmd_chaos() {
+  local secs=${1:-180}
+  need_curl
+  say "chaos for ${secs}s ${dim}(ctrl-c to stop)${reset} - traffic plus a random event every ~20s"
+  local end; end=$(( $(date +%s) + secs ))
+
+  # Background traffic for the whole run. The pid is global and the trap guards
+  # against it being unset: a `local` would be out of scope by the time an EXIT
+  # trap fires, which under `set -u` is an error rather than a no-op.
+  ( while [ "$(date +%s)" -lt "$end" ]; do hit "$(random_path)"; sleep 0.3; done ) &
+  TRAFFIC_PID=$!
+  trap 'kill "${TRAFFIC_PID:-}" 2>/dev/null || true' EXIT INT TERM
+
+  while [ "$(date +%s)" -lt "$end" ]; do
+    sleep $(( 12 + RANDOM % 12 ))
+    [ "$(date +%s)" -ge "$end" ] && break
+    case $((RANDOM % 7)) in
+      0) cmd_jobs 4 ;;
+      1) cmd_errors 2 ;;
+      2) cmd_burst 25 ;;
+      3) cmd_unhealthy; sleep 12; cmd_healthy ;;
+      4) cmd_slow 3 ;;
+      5) cmd_stress 6 ;;
+      6) cmd_pause cache; sleep 8; cmd_unpause cache ;;
+    esac
+  done
+
+  kill "$TRAFFIC_PID" 2>/dev/null || true
+  wait "$TRAFFIC_PID" 2>/dev/null || true
+  trap - EXIT INT TERM
+  TRAFFIC_PID=""
+  say "chaos over"
+}
+
+cmd_help() {
+  cat <<'TXT'
+Usage: ./demo <command> [args]
+
+Lifecycle
+  up                     start the stack and wait for it to be healthy
+  down                   stop and remove everything
+  status                 docker compose ps, including stopped services
+
+Traffic and logs
+  traffic [SECS] [RPS]   steady request flow          (default 60s at 4/s)
+  burst [N]              N concurrent requests        (default 40)
+  jobs [N]               queue worker jobs -> progress bars   (default 6)
+  errors [N]             500s with deep stack traces  (default 3)
+  slow [N]               slow requests                (default 4)
+  stress [SECS]          flood the worker with output (default 15s)
+
+Status transitions
+  unhealthy | healthy    flip the api health check
+  crash                  flaky exits 42
+  revive                 bring flaky back under a new container ID
+  pause | unpause [SVC]  pause a service              (default cache)
+  scale [N]              worker replicas              (default 3)
+  restart [SVC]          restart a service            (default api)
+  create-reporter        create a service without starting it
+  start-reporter         start it, live, while attached
+  wind-down              stop everything cleanly -> auto-exit countdown
+
+Hands-free
+  chaos [SECS]           traffic plus a random event every ~20s (default 180s)
+TXT
+}
+
+case "${1:-help}" in
+  up)              shift; cmd_up "$@" ;;
+  down)            shift; cmd_down "$@" ;;
+  status|ps)       shift; cmd_status "$@" ;;
+  traffic)         shift; cmd_traffic "$@" ;;
+  burst)           shift; cmd_burst "$@" ;;
+  jobs)            shift; cmd_jobs "$@" ;;
+  errors)          shift; cmd_errors "$@" ;;
+  slow)            shift; cmd_slow "$@" ;;
+  stress)          shift; cmd_stress "$@" ;;
+  unhealthy)       shift; cmd_unhealthy "$@" ;;
+  healthy)         shift; cmd_healthy "$@" ;;
+  crash)           shift; cmd_crash "$@" ;;
+  revive)          shift; cmd_revive "$@" ;;
+  pause)           shift; cmd_pause "$@" ;;
+  unpause)         shift; cmd_unpause "$@" ;;
+  scale)           shift; cmd_scale "$@" ;;
+  restart)         shift; cmd_restart "$@" ;;
+  create-reporter) shift; cmd_create_reporter "$@" ;;
+  start-reporter)  shift; cmd_start_reporter "$@" ;;
+  wind-down)       shift; cmd_wind_down "$@" ;;
+  chaos)           shift; cmd_chaos "$@" ;;
+  help|-h|--help)  cmd_help ;;
+  *) die "unknown command: $1 (try ./demo help)" ;;
+esac

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Fires demo events at fixed offsets so a take is reproducible.
+#
+#   Terminal A:  ./record-drive
+#   Terminal B:  asciinema rec demo.cast --cols 110 --rows 30 \
+#                  -c "composemux -c .composemux.demo.yaml"
+#
+# Start B when A prints "go". The opening beat is six seconds of just reading
+# the service list, which absorbs a second or two of slop either way.
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+RUN=${1:-56}   # length of the take, seconds
+
+at() { local t=$1; shift; ( sleep "$t"; "$@" >/dev/null 2>&1 ) & }
+
+printf 'stack check... '
+./demo status >/dev/null 2>&1 || { echo "run ./demo up first"; exit 1; }
+echo ok
+
+for i in 3 2 1; do printf '%s ' "$i"; sleep 1; done
+echo "go"
+
+# Continuous background traffic for the whole take: both the gateway and the
+# api pane need something arriving before they are pinned.
+( end=$(( $(date +%s) + RUN ))
+  while [ "$(date +%s)" -lt "$end" ]; do
+    curl -s -o /dev/null -m 5 "http://localhost:8099/orders" || true
+    sleep 0.3
+  done ) &
+TRAFFIC=$!
+trap 'kill "${TRAFFIC:-}" 2>/dev/null || true' EXIT INT TERM
+
+at 22 ./demo jobs 3     # progress bar is redrawing by 0:24
+at 32 ./demo errors 1   # traceback lands around 0:33
+at 40 ./demo crash      # flaky takes 1-5s to notice, red row by ~0:45
+
+sleep "$RUN"
+kill "$TRAFFIC" 2>/dev/null || true
+trap - EXIT INT TERM
+echo "take over - ./demo revive to reset flaky"

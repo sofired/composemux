@@ -1,0 +1,5 @@
+state/flags/*
+state/jobs/*
+!state/.gitkeep
+__pycache__/
+*.pyc
