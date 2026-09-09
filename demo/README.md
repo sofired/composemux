@@ -57,14 +57,14 @@ available as a single command, which is what the tour below uses.
 | Service | Image | What it is there for |
 |---|---|---|
 | `gateway` | nginx | Plain, uncoloured access logs — the same request the api also logs |
-| `api` | python | Colour-coded access logs, a health check you can break, deep tracebacks |
-| `worker` | python | Progress bars that redraw in place, 46-line stack traces, a stress mode |
-| `metrics` | python | Quiet unicode sparklines — a good second pin |
-| `flaky` | python | Runs until you tell it to exit 42 |
-| `migrate` | python | Runs once, exits 0, sits in the list as a finished job |
+| `api` | node | Colour-coded access logs, a health check you can break, deep tracebacks |
+| `worker` | node | Progress bars that redraw in place, 39-line stack traces, a stress mode |
+| `metrics` | node | Quiet unicode sparklines — a good second pin |
+| `flaky` | node | Runs until you tell it to exit 42 |
+| `migrate` | node | Runs once, exits 0, sits in the list as a finished job |
 | `db` | postgres | Real third-party output; initdb runs on every `up` |
 | `cache` | redis | Says nothing at all, which is the point |
-| `reporter` | python | Behind a profile, so it can arrive after composemux has attached |
+| `reporter` | node | Behind a profile, so it can arrive after composemux has attached |
 
 The services talk through `./state`, a bind mount. The activity script drops
 flag files in there and the services notice — which is why `./stack unhealthy`
@@ -106,7 +106,7 @@ Pin `worker` and queue some jobs:
 ```
 
 Each job draws a percentage bar that redraws in place with `\r`. Roughly one in
-six fails with a 46-line traceback. Both go through a vt100 emulator before
+six fails with a 39-line traceback. Both go through a vt100 emulator before
 they reach the screen, which is why the bar stays one line instead of smearing
 and the trace keeps its shape.
 
@@ -281,9 +281,15 @@ two, `/jobs` queues work for the worker, `/404` does what it says.
 A few choices here are deliberate, and they are the same choices worth making
 in a real project you intend to watch.
 
-**`PYTHONUNBUFFERED=1` on every python service.** Python buffers stdout when it
-is a pipe rather than a terminal. A service whose output is sitting in a buffer
-looks stalled in any log viewer.
+**TypeScript with no build step.** Node runs the `.ts` files directly, stripping
+the types as it loads them, so there is no `package.json`, no `tsconfig.json`, no
+`node_modules` and nothing to install. It also writes to stdout without the
+buffering that would make a service look stalled in a log viewer, so there is no
+flush to remember and no environment variable to set.
+
+The trade is that stripping is not checking: the types document the code and are
+erased at load, and nothing verifies them unless you point a `tsc` at them
+yourself.
 
 **No `tty: true` anywhere.** A tty strips the per-write headers the Docker
 daemon otherwise puts on each log chunk, and the client then has to scan for a
@@ -291,10 +297,14 @@ newline to know where one write ends. For the progress bars here — which emit
 `\r` and no newline until the bar completes — that would mean nothing appearing
 until the job finished.
 
-**SIGTERM handled explicitly.** Without a handler, Python dies on the default
+**SIGTERM handled explicitly.** Without a handler the process dies on the default
 disposition and Docker records exit 143, which is a failure. Handling it and
 exiting 0 is what makes `./stack wind-down` produce a clean stack rather than
 nine failed services.
+
+The exit itself waits for stdout to drain. Writes to a pipe are asynchronous, and
+a bare `process.exit()` truncates whatever has not landed yet — reliably the last
+line before the process goes, which is the one saying why it went.
 
 **Short healthcheck intervals.** Five seconds with two retries, rather than the
 usual thirty, so a health transition shows up while you are still looking at

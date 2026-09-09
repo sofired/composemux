@@ -5,13 +5,12 @@
 
 name: composemux-demo
 
-# Every hand-written service is the same stock python image with a different
-# script mounted in. No build step, no dependencies to install.
-x-py: &py
-  image: python:3.13-alpine
+# Every hand-written service is the same stock node image with a different
+# script mounted in. Node runs the TypeScript directly by stripping the types,
+# so there is no build step, no package.json and nothing to install.
+x-svc: &svc
+  image: node:24-alpine
   working_dir: /app
-  environment:
-    PYTHONUNBUFFERED: "1"   # unbuffered stdout: a buffered service looks stalled
   volumes:
     - ./services:/app:ro
     - ./state:/state
@@ -19,7 +18,7 @@ x-py: &py
   restart: "no"
 
 services:
-  # Plain, uncoloured access logs - a contrast to the python services, and a
+  # Plain, uncoloured access logs - a contrast to the node services, and a
   # second view of the same request.
   gateway:
     image: nginx:1.29-alpine
@@ -42,8 +41,8 @@ services:
   # The chatty one. Colour-coded access logs, and a health endpoint the activity
   # script can flip to failing.
   api:
-    <<: *py
-    command: python api.py
+    <<: *svc
+    command: node api.ts
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8000/health"]
       interval: 5s
@@ -58,26 +57,26 @@ services:
 
   # Progress bars and deep stack traces. Scales to several replicas.
   worker:
-    <<: *py
-    command: python worker.py
+    <<: *svc
+    command: node worker.ts
     depends_on:
       api:
         condition: service_started
 
   # Quiet, steady, unicode sparklines. Good second pin.
   metrics:
-    <<: *py
-    command: python metrics.py
+    <<: *svc
+    command: node metrics.ts
 
   # Stays up until `./stack crash`, then exits 42.
   flaky:
-    <<: *py
-    command: python flaky.py
+    <<: *svc
+    command: node flaky.ts
 
   # Runs once and exits 0 - the cleanly-finished row in the sidebar.
   migrate:
-    <<: *py
-    command: python migrate.py
+    <<: *svc
+    command: node migrate.ts
     depends_on:
       db:
         condition: service_healthy
@@ -116,6 +115,6 @@ services:
   # Behind a profile: not started with the rest, so you can bring it up while
   # composemux is already attached and watch the row appear.
   reporter:
-    <<: *py
-    command: python reporter.py
+    <<: *svc
+    command: node reporter.ts
     profiles: [extra]
