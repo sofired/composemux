@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Fires demo events at fixed offsets so a take is reproducible.
 #
-#   Terminal A:  ./record-drive
-#   Terminal B:  asciinema rec demo.cast --cols 110 --rows 30 \
-#                  -c "composemux -c .composemux.demo.yaml"
+# `demo.tape` starts this off camera and lines its own sleeps up against the
+# schedule below, so `vhs demo.tape` is the whole recording. By hand, it is:
 #
-# Start B when A prints "go". The opening beat is six seconds of just reading
-# the service list, which absorbs a second or two of slop either way.
+#   Terminal A:  ./record-drive
+#   Terminal B:  composemux -c .composemux.demo.yaml   (when A prints "go")
+#
+# The opening beat is six seconds of just reading the service list, which
+# absorbs a second or two of slop either way.
 
 set -euo pipefail
 cd "$(dirname "$0")"

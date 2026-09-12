@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Records the README demo. `vhs demo.tape` does the take and writes demo.gif and
+# preview.png; the GIF is then re-encoded to a 64-colour palette with no
+# dithering. VHS has no tape setting for its palette size, and 256 colours for a
+# 16-colour terminal theme is a quarter of the file for nothing.
+#
+# The stack has to be up, with flaky running: `./stack up`, or `./stack revive`
+# after a previous take has crashed it.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+vhs demo.tape
+
+ffmpeg -loglevel error -y -i demo.gif \
+  -vf "split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
+  demo.gif.tmp.gif
+mv demo.gif.tmp.gif demo.gif
+
+printf 'demo.gif %s bytes, preview.png %s bytes\n' "$(wc -c < demo.gif)" "$(wc -c < preview.png)"

@@ -224,23 +224,35 @@ is left alone.
 
 ## Recording the README demo
 
-The demo in the project README is recorded against this stack. Two files here
-exist only for that, and the beat sheet they follow is in
-[#84](https://github.com/sofired/composemux/issues/84).
-
-`record-drive` fires activity at fixed offsets so takes are reproducible —
-composemux is full screen for the whole take, so the events have to come from a
-second terminal on a timer rather than from anything visible on camera.
-
-```bash
-# terminal A
-./stack up && ./record-drive
-```
+The demo in the project README is recorded against this stack, and the
+recording is code: `demo.tape` drives [VHS](https://github.com/charmbracelet/vhs)
+through the beats in [#84](https://github.com/sofired/composemux/issues/84),
+and `record-drive` fires the activity at fixed offsets so a take is
+reproducible. composemux is full screen for the whole take, so the events have
+to come from a timer rather than from anything visible on camera; the tape
+starts `record-drive` off camera and its sleeps are lined up against that
+schedule.
 
 ```bash
-# terminal B, when A prints "go"
-asciinema rec demo.cast --cols 110 --rows 30 -c "composemux -c .composemux.demo.yaml"
+./stack up          # or ./stack revive, if flaky is down from a previous take
+./record            # vhs demo.tape, then the GIF re-encoded to 64 colours
 ```
+
+The re-encode is what keeps the GIF near 3 MB rather than 4.6: VHS has no tape
+setting for its palette, and a 16-colour theme does not need 256. Frame rate
+barely matters here - the traffic loop scrolls both panes on nearly every
+frame, so size follows pixels changed, not frames.
+
+`preview.png` is the frame with everything on screen at once -- two panes
+pinned, traffic in both, and the red row -- captured at 1280x640, which is the
+size GitHub's social preview wants.
+
+VHS needs `ttyd`, `ffmpeg` and a Chrome or Chromium. **Use VHS v0.11.0**:
+v0.12.0 captures every frame and then renders nothing, silently, because it
+runs the encoder on a context it has already cancelled. `go install
+github.com/charmbracelet/vhs@v0.11.0` is the quickest way to the working one.
+A release `composemux` has to be on `PATH` inside the tape's shell; the tape
+puts `../target/release` there itself.
 
 `.composemux.demo.yaml` differs from `.composemux.yaml` in the way that matters:
 nothing is pinned, so a take shows pinning happen rather than opening with it
@@ -248,7 +260,8 @@ already done. It also disables auto-exit, so no countdown popup gatecrashes a
 take.
 
 Every service's routine log lines are kept under 72 columns, which is what a
-pane gets at 110×30. Widen those formats and they will wrap on camera.
+pane gets at the tape's 1280x640 and 18px font. Widen those formats and they
+will wrap on camera.
 
 ## Command reference
 
