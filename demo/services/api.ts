@@ -7,7 +7,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import {
@@ -90,7 +90,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       size: randint(200, 9000),
     };
     mkdirSync(JOBS, { recursive: true });
-    writeFileSync(`${JOBS}/${job.id}.json`, JSON.stringify(job));
+    // Written beside the real name and moved into place, because the worker
+    // claims a job by renaming it and parses it straight away. `writeFileSync`
+    // creates the name before it writes the bytes, so a worker that listed the
+    // directory in that gap would claim a file that is still empty and die on
+    // the parse - `takeJob` does not guard it. The window is tiny for a 46-byte
+    // job and we could not hit it on purpose, but rename is atomic and closing
+    // it costs a line. `.partial` is skipped by the worker's `.json` filter.
+    const published = `${JOBS}/${job.id}.json`;
+    const staged = `${published}.partial`;
+    writeFileSync(staged, JSON.stringify(job));
+    renameSync(staged, published);
     respond(res, 202, { queued: job.id });
     access(method, full, 202, started, ` ${CYAN}queued ${job.kind}${RESET}`);
     return;

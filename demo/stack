@@ -32,6 +32,32 @@ PATHS=(/ /orders /users/42 /search?q=widgets /orders/9912 /404 /health-ui /cart)
 
 random_path() { echo "${PATHS[$((RANDOM % ${#PATHS[@]}))]}"; }
 
+# The services that must be running once `up` returns. migrate is deliberately
+# absent: it is a one-shot that exits, and `--wait` counts any container that
+# exits as a failure. It is checked on its exit code instead.
+LONG_RUNNING=(gateway api worker metrics flaky db cache)
+
+# `--wait` cannot be told that one service is expected to exit, so `up` below
+# tolerates its status - and then this says what actually came up. Without it a
+# dead worker, metrics or flaky still prints "up", because wait_for_gateway only
+# asks nginx about itself.
+assert_stack_up() {
+  local running svc bad=0 cid code
+  running=$($DC ps --services --status running 2>/dev/null || true)
+  for svc in "${LONG_RUNNING[@]}"; do
+    grep -qx "$svc" <<<"$running" || { warn "$svc is not running"; bad=1; }
+  done
+  cid=$($DC ps -aq migrate 2>/dev/null | head -1)
+  if [ -z "$cid" ]; then
+    warn "migrate never ran"
+    bad=1
+  else
+    code=$(docker inspect -f '{{.State.ExitCode}}' "$cid" 2>/dev/null || echo '?')
+    [ "$code" = 0 ] || { warn "migrate exited $code"; bad=1; }
+  fi
+  [ "$bad" -eq 0 ] || { $DC ps -a; die "the stack did not start cleanly - see the status above"; }
+}
+
 wait_for_gateway() {
   need_curl
   local n=0
@@ -48,7 +74,10 @@ cmd_up() {
   # Drop any reporter left over from a previous run, so `create-reporter` still
   # has a service that composemux has never seen.
   $DC --profile extra rm -sf reporter >/dev/null 2>&1 || true
+  # Status tolerated only because migrate exits; assert_stack_up is what turns
+  # that back into a real check.
   $DC up -d --wait --wait-timeout 120 || true
+  assert_stack_up
   wait_for_gateway
   say "up. now run ${bold}composemux${reset} in another terminal, then come back here."
 }
@@ -153,7 +182,10 @@ cmd_crash() {
 cmd_revive() {
   rm -f "$FLAGS/crash"
   say "restarting flaky - it comes back under a new container ID and composemux reattaches"
-  $DC up -d --no-deps flaky
+  # --force-recreate because a plain `up` restarts the exited container under
+  # its old ID when nothing about its config has changed, and the new ID is the
+  # whole point: it is what composemux has to notice and reattach to.
+  $DC up -d --no-deps --force-recreate flaky
 }
 
 cmd_pause() {
