@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Fires demo events at fixed offsets so a take is reproducible.
+#
+#   Terminal A:  ./record-drive
+#   Terminal B:  asciinema rec demo.cast --cols 110 --rows 30 \
+#                  -c "composemux -c .composemux.demo.yaml"
+#
+# Start B when A prints "go". The opening beat is six seconds of just reading
+# the service list, which absorbs a second or two of slop either way.
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+RUN=${1:-56}   # length of the take, seconds
+
+# The events below are pinned to 22s, 32s and 40s, and ./stack crash needs a few
+# seconds after that to show red. A shorter take would end with events still
+# queued, so it is refused rather than silently recording a take that is missing
+# the things it exists to show.
+[[ $RUN =~ ^[0-9]+$ ]] || { echo "RUN must be a whole number of seconds" >&2; exit 1; }
+[ "$RUN" -ge 56 ] || { echo "RUN must be at least 56s - the last event fires at 40s" >&2; exit 1; }
+
+# Scheduled events are tracked so cleanup can cancel them. Without this an early
+# exit - ctrl-c, or a take shorter than the schedule - leaves ./stack commands
+# firing into a terminal that has stopped recording.
+EVENTS=()
+at() { local t=$1; shift; ( sleep "$t"; "$@" >/dev/null 2>&1 ) & EVENTS+=("$!"); }
+
+cleanup() {
+  kill "${TRAFFIC:-}" ${EVENTS[@]+"${EVENTS[@]}"} 2>/dev/null || true
+  EVENTS=()
+}
+
+# `./stack status` is `docker compose ps -a`, which exits 0 for a project that
+# has never been started, so it cannot tell a running stack from an empty one.
+# Ask the api through the gateway instead: 200 is healthy and 503 is the demo's
+# own unhealthy flag, but both prove the api answered. 502 and 504 are nginx
+# saying it could not reach the api, and 000 is nothing listening at all.
+printf 'stack check... '
+n=0
+until
+  code=$(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://localhost:8099/health" 2>/dev/null || echo 000)
+  [ "$code" = 200 ] || [ "$code" = 503 ]
+do
+  n=$((n + 1))
+  [ "$n" -ge 30 ] && { echo "no answer from the api (last: $code) - run ./stack up first" >&2; exit 1; }
+  sleep 1
+done
+echo ok
+
+for i in 3 2 1; do printf '%s ' "$i"; sleep 1; done
+echo "go"
+
+# Continuous background traffic for the whole take: both the gateway and the
+# api pane need something arriving before they are pinned.
+( end=$(( $(date +%s) + RUN ))
+  while [ "$(date +%s)" -lt "$end" ]; do
+    curl -s -o /dev/null -m 5 "http://localhost:8099/orders" || true
+    sleep 0.3
+  done ) &
+TRAFFIC=$!
+trap cleanup EXIT INT TERM
+
+at 22 ./stack jobs 3     # progress bar is redrawing by 0:24
+at 32 ./stack errors 1   # traceback lands around 0:33
+at 40 ./stack crash      # flaky takes 1-5s to notice, red row by ~0:45
+
+sleep "$RUN"
+cleanup
+trap - EXIT INT TERM
+echo "take over - ./stack revive to reset flaky"

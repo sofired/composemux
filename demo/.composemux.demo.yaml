@@ -1,0 +1,8 @@
+# Recording config. Differs from .composemux.yaml in one way that matters:
+# nothing is pinned, so the recording can show pinning happen rather than
+# opening with it already done.
+project: composemux-demo
+pinned: []
+tail: 50          # enough history that a pane opens with content, not a wall
+scrollback: 2000
+auto_exit: false  # no countdown popup appearing mid-take

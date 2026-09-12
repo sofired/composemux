@@ -1,0 +1,16 @@
+# Read by composemux when you run it from this directory. Every key here is
+# optional - delete the file and the demo still works, just without the pins.
+
+project: composemux-demo
+
+# api in pane 1, worker in pane 2 at startup: one chatty service and one that
+# draws progress bars. Press 1 or 2 on any other service to move them.
+pinned: [api, worker]
+
+tail: 200          # lines of history loaded per service before following
+scrollback: 2000   # rows retained per service - raise it before `./stack stress`
+auto_exit: 3       # seconds to count down once everything has exited cleanly
+
+# Try these too:
+# include: [api, worker, gateway]   # show only these
+# exclude: [migrate]                # hide the one-shot job

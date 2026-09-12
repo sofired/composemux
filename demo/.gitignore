@@ -1,0 +1,3 @@
+state/flags/*
+state/jobs/*
+!state/.gitkeep
