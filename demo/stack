@@ -85,7 +85,22 @@ cmd_up() {
 cmd_down() {
   say "tearing down"
   $DC --profile extra down --remove-orphans -v
-  rm -f "$FLAGS"/* state/jobs/* 2>/dev/null || true
+  # The services run as root - the node image has no other default - so what
+  # they wrote under state/ is root-owned. The host user can still unlink it,
+  # because `up` created the directories, but if a container created them
+  # instead the host cannot. A container can, and one of the images is still
+  # here at this point.
+  rm -rf "$FLAGS" state/jobs 2>/dev/null \
+    || docker run --rm -v "$PWD/state:/state" node:24-alpine rm -rf /state/flags /state/jobs
+  # The pulled images are the last thing `down` would leave behind. They are
+  # stock public images and the next `up` pulls them again. One that another
+  # container on this host is using cannot be removed without forcing it, so it
+  # is kept and named instead.
+  local img
+  for img in $($DC --profile extra config --images | sort -u); do
+    docker image rm "$img" >/dev/null 2>&1 || warn "kept $img - in use by something outside this stack"
+  done
+  say "down. nothing of the stack is left on this host."
 }
 
 cmd_status() { $DC --profile extra ps -a; }

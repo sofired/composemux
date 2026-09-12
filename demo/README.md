@@ -8,8 +8,11 @@ up, one that draws progress bars, one that exits 42 when you ask it to, one
 that says almost nothing — so every column in the service list has something in
 it and every feature has something to demonstrate.
 
-Nothing is stateful. `./stack down` leaves no volumes, no images to clean up,
-and nothing on disk.
+Nothing is stateful, and `./stack down` removes everything the stack put on
+this host: containers, the network, whatever the services wrote under `state/`,
+and the four pulled images - so the next `up` starts from a pull. The one thing
+it will not do is force an image away from another container that is using it;
+that image is kept, and named.
 
 ## Requirements
 
@@ -212,6 +215,12 @@ worst possible time for the log viewer to disappear.
 ```bash
 ./stack down
 ```
+
+Containers, network, `state/flags`, `state/jobs` and the pulled images all go.
+The images are stock `node`, `nginx`, `postgres` and `redis` tags, so if
+something else on this host has a container on one of them it stays, and
+`down` says which. Any `demo.cast` you recorded is yours, not the stack's, and
+is left alone.
 
 ## Recording the README demo
 
