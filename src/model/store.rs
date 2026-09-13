@@ -153,7 +153,7 @@ fn last_row_blank(parser: &mut vt100::Parser) -> bool {
 /// about 27 ns each: 5.6 us at 200 columns, 1.1 us at 40, flat in the grid's
 /// row count and in the scrollback depth behind it. A row with content exits
 /// at its first non-blank cell: 20 to 40 ns for a row that starts in column
-/// 0, and INDENT_PLACEHOLDER for one indented four columns, which is what this
+/// 0, and about 150 ns for one indented four columns, which is what this
 /// project's own demo emits for stack-trace frames.
 ///
 /// So the cost is one `Screen::cell` per column of one row per `process`, and
