@@ -97,13 +97,54 @@ fn last_row_blank(parser: &mut vt100::Parser) -> bool {
     let (rows, cols) = screen.size();
     // `MIN_ROWS` keeps the grid non-empty, so there is always a last row.
     let last = rows.saturating_sub(1);
-    let blank = (0..cols).all(|col| {
-        screen
-            .cell(last, col)
-            .is_none_or(|cell| cell.contents().is_empty())
-    });
+    let blank = (0..cols).all(|col| screen.cell(last, col).is_none_or(cell_is_invisible));
     parser.screen_mut().set_scrollback(saved);
     blank
+}
+
+/// Whether a cell would put nothing on the frame.
+///
+/// Not the same as having no contents, which is what this used to ask.
+/// `vt100` keeps the pen on a cell it erases -- `Cell::clear` stores the live
+/// attributes alongside `len = 0` -- so a row wiped under `CSI 41 m` is a row
+/// of contentless cells that `log_pane::cell_style` still paints, as a red
+/// bar. Calling that row blank drops it out of the pane's window, and the bar
+/// with it.
+///
+/// Which attributes count is decided by two things together: what `cell_style`
+/// emits, and which of those a cell with no glyph can show. It emits
+/// foreground, background, bold, italic, underline and inverse. Of those only
+/// background, underline and inverse are visible with nothing to draw --
+/// ratatui paints an underlined or reversed space, and a background fills the
+/// cell whatever is in it. Foreground, bold and italic colour and weight a
+/// glyph that is not there.
+///
+/// So this checks exactly three attributes, and adding the other three would
+/// be a regression rather than extra safety. A predicate stricter than the
+/// frame hides nothing; what it does is keep a genuinely empty cursor row on
+/// screen whenever the pen happens to be bold or coloured when a line ends,
+/// which is #93 coming back. `only_the_attributes_a_frame_shows_on_an_empty_
+/// cell_count` pins both directions.
+///
+/// The three reads are free; the scan around them is not, and was not before
+/// this either. Measured in release at 50x200, 50k iterations: a blank row
+/// costs 5.6 us and the same scan asking only `contents()` -- the predicate
+/// this replaced -- costs 5.2 to 6.5 us across runs, which is the same figure
+/// inside the noise. What it buys is a `Screen::cell` call per column, at
+/// about 27 ns each: 5.6 us at 200 columns, 1.1 us at 40, flat in the grid's
+/// row count and in the scrollback depth behind it. A row with content exits
+/// at the first column, in 20 to 40 ns.
+///
+/// So the cost is one `Screen::cell` per column of one row per `process`, and
+/// for scale `vt100` parses one log line in about 1 us. A chunk carrying a
+/// single line at 200 columns therefore pays several times its own parse; a
+/// chunk carrying fifty pays a few per cent. Worth knowing before anything
+/// widens this to more rows.
+fn cell_is_invisible(cell: &vt100::Cell) -> bool {
+    cell.contents().is_empty()
+        && cell.bgcolor() == vt100::Color::Default
+        && !cell.underline()
+        && !cell.inverse()
 }
 
 fn bytecount(bytes: &[u8]) -> usize {
@@ -992,6 +1033,56 @@ mod tests {
         );
         s.process(b"\n");
         assert!(s.tail_row_blank(), "ending the line frees the row again");
+    }
+
+    /// CodeRabbit on #94: `vt100` keeps the pen on a cell it erases, so a row
+    /// wiped under a background colour has no contents and is still a red bar
+    /// on the frame. Reading blankness from `contents()` alone dropped it.
+    #[test]
+    fn a_row_erased_under_a_colour_is_not_blank() {
+        let mut s = store_with(20);
+        assert!(s.tail_row_blank(), "the cursor's row starts empty");
+        s.process(b"\x1b[41m\x1b[K");
+        assert!(
+            !s.tail_row_blank(),
+            "an erase under `CSI 41 m` leaves a row of red cells, not a blank row"
+        );
+        s.process(b"\x1b[0m\x1b[K");
+        assert!(
+            s.tail_row_blank(),
+            "erasing again under the default pen really does leave it blank"
+        );
+    }
+
+    /// The boundary the predicate sits on, from both sides.
+    ///
+    /// `cell_style` emits six attributes; only three of them show on a cell
+    /// with no glyph in it. Checking fewer drops a visible row out of the
+    /// pane's window, which is the bug above. Checking more is not safer: it
+    /// would keep the blank cursor row on screen whenever a service happens to
+    /// end a line with a colour or a weight still set, which is #93 again.
+    #[test]
+    fn only_the_attributes_a_frame_shows_on_an_empty_cell_count() {
+        for (sgr, blank, what) in [
+            (
+                "\x1b[41m",
+                false,
+                "a background fills a cell with nothing in it",
+            ),
+            ("\x1b[4m", false, "ratatui draws an underlined space"),
+            ("\x1b[7m", false, "inverse swaps the colours of a space"),
+            (
+                "\x1b[31m",
+                true,
+                "a foreground colours a glyph that is not there",
+            ),
+            ("\x1b[1m", true, "bold weights a glyph that is not there"),
+            ("\x1b[3m", true, "italic slants a glyph that is not there"),
+        ] {
+            let mut s = store_with(20);
+            s.process(format!("{sgr}\x1b[K").as_bytes());
+            assert_eq!(s.tail_row_blank(), blank, "{what}");
+        }
     }
 
     /// The `\r` case the issue calls out: a progress bar leaves the cursor at

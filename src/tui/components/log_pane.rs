@@ -223,6 +223,13 @@ fn first_drawn_row(rows: u16, height: u16, tail_blank: bool) -> u16 {
     rows.saturating_sub(height.saturating_add(u16::from(tail_blank)))
 }
 
+/// The frame style for one emulator cell.
+///
+/// `LogStore::cell_is_invisible` is the other half of this: it decides whether
+/// a contentless cell would show anything, and it decides it from the list
+/// below. An attribute added here that is visible on an empty cell -- as
+/// background, underline and inverse are -- has to be added there too, or an
+/// erased last row goes back to being dropped out of the pane's window.
 fn cell_style(cell: &vt100::Cell) -> Style {
     let mut style = Style::default()
         .fg(convert_color(cell.fgcolor()))
