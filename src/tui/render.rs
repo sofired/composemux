@@ -20,7 +20,7 @@ pub fn layout_for(app: &App, area: ratatui::layout::Rect) -> (LayoutAreas, Vec<(
         .iter()
         .zip(app.occupied_panes())
         .map(|(rect, slot)| {
-            let (rows, cols) = log_pane::inner_size(*rect);
+            let (rows, cols) = log_pane::emulator_size(*rect);
             (slot, rows, cols)
         })
         .collect();
@@ -364,7 +364,7 @@ mod tests {
             .screen()
             .size();
 
-        let (want_rows, want_cols) = log_pane::inner_size(areas.panes[0]);
+        let (want_rows, want_cols) = log_pane::emulator_size(areas.panes[0]);
         assert_eq!(
             (rows, cols),
             (want_rows, want_cols),
@@ -765,5 +765,187 @@ mod tests {
             press(&mut app, KeyCode::Char('2'));
             let _ = render_to_lines(&app, w, h);
         }
+    }
+
+    /// One rendered pane: where it sits, and its rows between the borders.
+    struct PaneFrame {
+        /// Row of the top border, for failure messages.
+        top: usize,
+        /// Rows between the borders, sliced to the pane's own columns.
+        ///
+        /// Column-sliced because the frame carries the service list beside the
+        /// panes: a row that looks occupied across the whole frame can still
+        /// be blank inside the pane, and it is the inside that #93 is about.
+        interior: Vec<String>,
+        /// The pane's right border column, top corner to bottom.
+        ///
+        /// The scrollbar is drawn over that column rather than inside the
+        /// border, corners included, so this is where a track shows up -- and
+        /// why the right edge cannot be found by looking for a corner glyph.
+        edge: String,
+    }
+
+    /// Locates every pane drawn on a frame.
+    fn panes_of(lines: &[String]) -> Vec<PaneFrame> {
+        let rows: Vec<Vec<char>> = lines.iter().map(|l| l.chars().collect()).collect();
+        let mut out = Vec::new();
+        for (y, chars) in rows.iter().enumerate() {
+            let Some(left) = chars.iter().position(|c| *c == '┌' || *c == '┏') else {
+                continue;
+            };
+            // The panes are the rightmost thing on every layout the tests
+            // render, so the last occupied column of a top border row is the
+            // pane's right edge whether a corner or a scrollbar is on it.
+            let right = chars.iter().rposition(|c| *c != ' ').expect("a border row");
+            let bottom = rows[y + 1..]
+                .iter()
+                .position(|r| r.get(left).is_some_and(|c| *c == '└' || *c == '┗'))
+                .map(|d| y + 1 + d)
+                .expect("a pane top border needs a bottom border under it");
+            out.push(PaneFrame {
+                top: y,
+                interior: rows[y + 1..bottom]
+                    .iter()
+                    .map(|r| r[left + 1..right].iter().collect())
+                    .collect(),
+                edge: rows[y..=bottom]
+                    .iter()
+                    .filter_map(|r| r.get(right))
+                    .collect(),
+            });
+        }
+        out
+    }
+
+    /// #93, as measured in the issue: a pane used to show one blank row above
+    /// its content and two below, because the emulator's cursor row was inside
+    /// the grid the pane drew.
+    ///
+    /// Asserting on every interior row rather than on a count of blank ones:
+    /// the fault is a *position*, and a pane that showed the same number of
+    /// blanks somewhere else would be just as wrong.
+    #[test]
+    fn a_pane_pads_its_content_symmetrically() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('2'));
+        let (_, sizes) = layout_for(&app, Rect::new(0, 0, 120, 30));
+        app.resize_panes(&sizes);
+        for (name, container) in [("api", "c1"), ("worker", "c2")] {
+            let key = crate::tui::app::ServiceKey::new(name, 1);
+            for i in 0..40 {
+                app.ingest(
+                    key.clone(),
+                    container,
+                    1,
+                    format!("{name} line {i}\n").as_bytes(),
+                );
+            }
+        }
+        let lines = render_to_lines(&app, 120, 30);
+        let panes = panes_of(&lines);
+        assert_eq!(panes.len(), 2, "expected two panes:\n{}", lines.join("\n"));
+        for pane in panes {
+            let (top, interior) = (pane.top, pane.interior);
+            let (first, last) = (0, interior.len() - 1);
+            assert!(
+                interior[first].trim().is_empty(),
+                "the pane at row {top} should open with one padding row:\n{interior:#?}"
+            );
+            assert!(
+                interior[last].trim().is_empty(),
+                "the pane at row {top} should close with one padding row:\n{interior:#?}"
+            );
+            for (i, drawn) in interior[first + 1..last].iter().enumerate() {
+                assert!(
+                    !drawn.trim().is_empty(),
+                    "row {} of the pane at row {top} is blank, so a log line that \
+                     would fit is not being shown:\n{interior:#?}",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    /// The demo worker's own bar bytes, from `demo/services/common.ts`.
+    fn progress_bar(step: usize) -> String {
+        let width = 22;
+        let filled = step * width / 24;
+        let bar = "#".repeat(filled) + &"-".repeat(width - filled);
+        let pct = step * 100 / 24;
+        format!("\r\x1b[2m12:00:01.500\x1b[0m \x1b[36m..... migrate \x1b[0m[{bar}] {pct:>3}%")
+    }
+
+    /// The cursor's row is only spare while nothing is on it, so a `\r` bar
+    /// part way through a redraw has to keep the pane's bottom line -- and the
+    /// newline that finally ends it must not move the frame, because the grid
+    /// scrolls by exactly the row the window gives back.
+    #[test]
+    fn a_progress_bar_holds_the_pane_s_last_line_until_its_newline() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('1'));
+        let (_, sizes) = layout_for(&app, Rect::new(0, 0, 120, 30));
+        app.resize_panes(&sizes);
+        let key = crate::tui::app::ServiceKey::new("api", 1);
+        for i in 0..40 {
+            app.ingest(key.clone(), "c1", 1, format!("api line {i}\n").as_bytes());
+        }
+        for step in 0..=24 {
+            app.ingest(key.clone(), "c1", 1, progress_bar(step).as_bytes());
+        }
+
+        let live = render_to_lines(&app, 120, 30);
+        let interior = panes_of(&live).pop().expect("one pane").interior;
+        let last_drawn = &interior[interior.len() - 2];
+        assert!(
+            last_drawn.contains("[######################] 100%"),
+            "the live bar should hold the pane's last line:\n{interior:#?}"
+        );
+        assert!(
+            interior[interior.len() - 1].trim().is_empty(),
+            "the bottom padding row is the pane's, not the emulator's:\n{interior:#?}"
+        );
+
+        app.ingest(key, "c1", 1, b"\n");
+        assert_eq!(
+            render_to_lines(&app, 120, 30),
+            live,
+            "the newline that ends the bar should not move the frame"
+        );
+    }
+
+    /// The scrollbar measures the window, not the grid, and the grid is a row
+    /// taller than the window. Counting the whole grid put a track on every
+    /// tailing pane that has ever filled.
+    #[test]
+    fn a_tailing_pane_shows_no_scrollbar() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('1'));
+        let (_, sizes) = layout_for(&app, Rect::new(0, 0, 120, 30));
+        app.resize_panes(&sizes);
+        let key = crate::tui::app::ServiceKey::new("api", 1);
+        for i in 0..40 {
+            app.ingest(key.clone(), "c1", 1, format!("api line {i}\n").as_bytes());
+        }
+        let tailing = render_to_lines(&app, 120, 30);
+        let edge = panes_of(&tailing).pop().expect("one pane").edge;
+        assert!(
+            !edge.contains('↑') && !edge.contains('↓'),
+            "a pane at the bottom of its buffer has nothing to scroll to, but \
+             its right edge reads {edge:?}:\n{}",
+            tailing.join("\n")
+        );
+
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('k'));
+        let scrolled = render_to_lines(&app, 120, 30);
+        let edge = panes_of(&scrolled).pop().expect("one pane").edge;
+        assert!(
+            edge.contains('↑'),
+            "scrolling up should put a track on the pane, whose right edge \
+             reads {edge:?}:\n{}",
+            scrolled.join("\n")
+        );
     }
 }

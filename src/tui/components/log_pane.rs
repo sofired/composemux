@@ -23,6 +23,18 @@ use ratatui::widgets::{
 /// Border plus the 2/1 padding nx uses inside a pane.
 const H_CHROME: u16 = 2 + 4;
 const V_CHROME: u16 = 2 + 2;
+/// The one row of grid the pane is given beyond what it draws.
+///
+/// nx has no use for it: its pane is a pty, so the row the cursor rests on
+/// holds a prompt or the tail of a line that has not ended yet, and showing it
+/// is the point. A log pane is fed container output, which ends every line in
+/// `\n`, so the cursor comes to rest on an empty row after every write. Sized
+/// to the rows the pane draws, that row is one of them, and the pane shows a
+/// blank line above its bottom padding for ever -- 1 row of padding above the
+/// content against 2 below, and a row per pane that can never hold a log line.
+/// One row of slack is what lets `blit_screen` leave the cursor's row out of
+/// the frame without leaving a hole in the pane.
+const CURSOR_ROW: u16 = 1;
 /// Below this the pane is too small to show anything useful.
 const MIN_PANE: u16 = 5;
 
@@ -37,9 +49,17 @@ pub struct PaneRender<'a> {
     pub tab_hint: bool,
 }
 
-/// Inner area available to the emulator for a pane of this size.
-pub fn inner_size(area: Rect) -> (u16, u16) {
-    let rows = area.height.saturating_sub(V_CHROME).max(3);
+/// Rows of a pane of this size that `blit_screen` draws into.
+fn drawn_rows(area: Rect) -> u16 {
+    area.height.saturating_sub(V_CHROME).max(3)
+}
+
+/// Emulator grid size for a pane of this size.
+///
+/// One row taller than the pane draws, which is [`CURSOR_ROW`]. The columns
+/// are the pane's own, since nothing is held back horizontally.
+pub fn emulator_size(area: Rect) -> (u16, u16) {
+    let rows = drawn_rows(area).saturating_add(CURSOR_ROW);
     let cols = area.width.saturating_sub(H_CHROME).max(20);
     (rows, cols)
 }
@@ -130,12 +150,16 @@ pub fn render(pane: &PaneRender, area: Rect, buf: &mut Buffer) {
 }
 
 /// Copies the emulator's visible cells into the frame buffer.
+///
+/// The grid is [`CURSOR_ROW`] taller than the pane draws, so one row of it is
+/// always left out, and `first_drawn_row` picks which.
 fn blit_screen(store: &LogStore, inner: Rect, buf: &mut Buffer) {
     let screen = store.screen();
     let (rows, cols) = screen.size();
-    for row in 0..rows.min(inner.height) {
+    let first = first_drawn_row(rows, inner.height, store.tail_row_blank());
+    for row in 0..inner.height.min(rows.saturating_sub(first)) {
         for col in 0..cols.min(inner.width) {
-            let Some(src) = screen.cell(row, col) else {
+            let Some(src) = screen.cell(first + row, col) else {
                 continue;
             };
             let Some(dst) = buf.cell_mut((inner.x + col, inner.y + row)) else {
@@ -150,6 +174,33 @@ fn blit_screen(store: &LogStore, inner: Rect, buf: &mut Buffer) {
             dst.set_style(cell_style(src));
         }
     }
+}
+
+/// The emulator row the pane's top line shows.
+///
+/// The window is anchored to the *bottom* of the grid, one row short of it
+/// while the last row is blank. That is the whole fix: the cursor's row falls
+/// off the end of the window instead of occupying a line of the pane, and the
+/// row that would have scrolled out of the top takes its place.
+///
+/// When a container writes without a trailing newline -- a `\r` progress bar
+/// part way through a redraw -- the last row is its live line, and the window
+/// moves down to keep it on screen at the cost of the oldest row. That is what
+/// a terminal does when a line appears anyway, and it is what makes the
+/// transition invisible: the newline that ends the line scrolls the grid by
+/// one and the window moves back up by one, so the same rows stay put.
+///
+/// This is a *visible* row index, and the anchor is what makes that sound: at
+/// scroll offset `k` the emulator's visible rows start `k` rows earlier, so a
+/// window measured back from the grid's bottom is the same window moved back
+/// by `k`, which is what scrolling up is meant to do. Anchoring to the top
+/// would instead have moved the window twice per scroll step.
+///
+/// Saturating throughout for the panes small enough that the grid's own floor
+/// binds: below about seven rows the grid is taller than the pane's inner
+/// area by more than [`CURSOR_ROW`], and the surplus comes off the top.
+fn first_drawn_row(rows: u16, height: u16, tail_blank: bool) -> u16 {
+    rows.saturating_sub(height.saturating_add(u16::from(tail_blank)))
 }
 
 fn cell_style(cell: &vt100::Cell) -> Style {
@@ -185,7 +236,14 @@ fn render_scrollbar(store: &LogStore, area: Rect, inner: Rect, buf: &mut Buffer,
     let offset = store.scroll_offset();
     // Row count comes from the emulator's own geometry; materialising the text
     // just to measure it would allocate a String per row on every frame.
-    let total = store.screen().size().0 as usize + offset;
+    // Less `CURSOR_ROW`, because the grid is that much taller than the window
+    // the track is measuring: what is left is the rows the pane draws plus the
+    // scrollback behind them. Subtracting unconditionally rather than only
+    // while the last row is blank keeps the track still -- a live progress bar
+    // hides the grid's top row for as long as it is being redrawn, and a
+    // scrollbar that blinked in and out with it would cost more than the row
+    // of precision it bought.
+    let total = (store.screen().size().0 as usize).saturating_sub(CURSOR_ROW as usize) + offset;
     let scrollable = total.saturating_sub(inner.height as usize);
     if scrollable == 0 {
         return;
@@ -208,17 +266,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inner_size_subtracts_border_and_padding() {
-        let (rows, cols) = inner_size(Rect::new(0, 0, 100, 40));
+    fn the_emulator_is_the_pane_plus_the_cursor_row() {
+        let (rows, cols) = emulator_size(Rect::new(0, 0, 100, 40));
         assert_eq!(cols, 100 - 6);
-        assert_eq!(rows, 40 - 4);
+        assert_eq!(
+            rows,
+            40 - 4 + 1,
+            "the grid is the drawn rows plus the row the cursor rests on"
+        );
     }
 
     #[test]
-    fn inner_size_never_goes_below_the_minimum() {
-        let (rows, cols) = inner_size(Rect::new(0, 0, 6, 4));
-        assert_eq!(rows, 3);
+    fn emulator_size_never_goes_below_the_minimum() {
+        let (rows, cols) = emulator_size(Rect::new(0, 0, 6, 4));
+        assert_eq!(rows, 3 + 1);
         assert_eq!(cols, 20);
+    }
+
+    #[test]
+    fn a_blank_last_row_falls_off_the_bottom_of_the_window() {
+        // The grid a 40-row pane gets: 36 drawn rows and the cursor's.
+        assert_eq!(
+            first_drawn_row(37, 36, true),
+            0,
+            "with nothing on the last row the window ends above it"
+        );
+        assert_eq!(
+            first_drawn_row(37, 36, false),
+            1,
+            "a line still being written pulls the window down onto it"
+        );
+    }
+
+    #[test]
+    fn the_window_stays_anchored_to_the_bottom_of_a_grid_it_cannot_fill() {
+        // Panes this small are floored at three rows by `drawn_rows` while
+        // ratatui gives their inner area one, so the grid runs ahead of the
+        // window by more than the cursor row and the surplus comes off the top.
+        assert_eq!(first_drawn_row(4, 1, true), 2);
+        assert_eq!(first_drawn_row(4, 1, false), 3);
+    }
+
+    #[test]
+    fn a_window_taller_than_the_grid_starts_at_the_top() {
+        assert_eq!(first_drawn_row(4, 40, true), 0);
+        assert_eq!(first_drawn_row(4, 40, false), 0);
     }
 
     #[test]

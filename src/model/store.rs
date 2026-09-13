@@ -73,6 +73,39 @@ fn pen_after(prefix: &[u8], dropped: &[u8]) -> Vec<u8> {
     scratch.screen().attributes_formatted()
 }
 
+/// Whether the emulator's last grid row has nothing drawn on it.
+///
+/// That row is where the cursor comes to rest after every line, because
+/// container output is newline-terminated, and the pane leaves it out of the
+/// frame while it is blank -- see `log_pane::blit_screen`. It is asked of the
+/// grid rather than of the byte stream because "the last byte was a newline"
+/// is not the same question: a container that ends a line with `\n\x1b[0m`
+/// leaves a blank row behind a non-newline last byte, and one redrawing a
+/// progress bar with `\r` leaves a full row behind a cursor back at column 0.
+/// `adopt` can afford that over-approximation because it costs one blank row
+/// once per recreate; a pane would wear it on every frame.
+///
+/// Takes the parser by `&mut` only to read: `Screen::cell` indexes the
+/// *visible* rows, which start `scrollback()` rows earlier, so the last grid
+/// row is out of reach of it whenever the reader has scrolled up. The offset
+/// is put back before returning, and `set_scrollback` clamps to a scrollback
+/// length nothing here changes, so the round trip restores it exactly.
+fn last_row_blank(parser: &mut vt100::Parser) -> bool {
+    let saved = parser.screen().scrollback();
+    parser.screen_mut().set_scrollback(0);
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    // `MIN_ROWS` keeps the grid non-empty, so there is always a last row.
+    let last = rows.saturating_sub(1);
+    let blank = (0..cols).all(|col| {
+        screen
+            .cell(last, col)
+            .is_none_or(|cell| cell.contents().is_empty())
+    });
+    parser.screen_mut().set_scrollback(saved);
+    blank
+}
+
 fn bytecount(bytes: &[u8]) -> usize {
     bytes.iter().filter(|b| **b == b'\n').count()
 }
@@ -84,8 +117,10 @@ fn keep_lines_for(scrollback: usize, rows: u16) -> usize {
 /// Floor on the emulated screen size.
 ///
 /// `vt100` underflows in `col_wrap` on very narrow grids, so this is a crash
-/// guard rather than a cosmetic minimum. It matches the floor the pane's own
-/// geometry already applies, so it never binds in the render path.
+/// guard rather than a cosmetic minimum. The pane's own geometry floors itself
+/// at or above both figures -- `MIN_ROWS` exactly for columns, one row higher
+/// for rows, since `log_pane::emulator_size` adds the cursor row on top of its
+/// own floor of three -- so neither ever binds in the render path.
 const MIN_ROWS: u16 = 3;
 const MIN_COLS: u16 = 20;
 
@@ -320,6 +355,14 @@ pub struct LogStore {
     pen: Vec<u8>,
     /// True once any output at all has been received.
     has_output: bool,
+    /// Whether the emulator's last grid row is blank, as of the last write.
+    ///
+    /// Cached rather than asked at render time because answering it needs the
+    /// scroll offset moved and put back, which a `&LogStore` cannot do -- see
+    /// [`last_row_blank`]. It is a property of the grid, not of the view, so
+    /// scrolling does not stale it; only a write or a rebuild can, and both
+    /// refresh it.
+    tail_blank: bool,
     /// Whether the emulator is the placeholder a release left behind rather
     /// than this store's screen.
     ///
@@ -345,12 +388,31 @@ impl LogStore {
             pen: Vec::new(),
             replay_pending: false,
             has_output: false,
+            // An emulator nothing has been written to is blank throughout.
+            tail_blank: true,
             released: false,
         }
     }
 
     pub fn has_output(&self) -> bool {
         self.has_output
+    }
+
+    /// Whether the emulator's last grid row has nothing on it.
+    ///
+    /// The pane is given a grid one row taller than it draws, and this is what
+    /// tells it which row to leave out: while the last one is blank the window
+    /// ends above it, and the pane fills with content rather than showing the
+    /// cursor's row as a permanent blank line. Held to `live_screen`'s rule
+    /// even though it reads a cached bool, because the answer describes a grid
+    /// a released store no longer has.
+    pub fn tail_row_blank(&self) -> bool {
+        debug_assert!(
+            !self.released,
+            "asked a released store about its last row: readers must resolve \
+             through `App::pane_key`, the set `release_offscreen_stores` leaves alone"
+        );
+        self.tail_blank
     }
 
     pub fn screen(&self) -> &vt100::Screen {
@@ -561,6 +623,7 @@ impl LogStore {
         // regardless of what was fed to it in the meantime.
         if !self.released {
             self.parser.process(&normalised);
+            self.tail_blank = last_row_blank(&mut self.parser);
         }
         self.has_output = true;
     }
@@ -736,6 +799,9 @@ impl LogStore {
             old_offset
         };
         self.parser.screen_mut().set_scrollback(target);
+        // Both branches above changed the grid -- one rebuilt it, the other
+        // resized it -- so neither can be trusted to have kept the answer.
+        self.tail_blank = last_row_blank(&mut self.parser);
     }
 
     /// Drops the emulator, keeping the bytes needed to rebuild it.
@@ -906,6 +972,81 @@ mod tests {
             .map(|l| l.trim_end().to_string())
             .filter(|l| !l.is_empty())
             .collect()
+    }
+
+    /// #93: the pane is given a grid a row taller than it draws, and this is
+    /// the answer that decides which row it leaves out.
+    #[test]
+    fn a_trailing_newline_leaves_the_last_row_blank() {
+        let mut s = store_with(20);
+        assert!(
+            s.tail_row_blank(),
+            "every line ended in a newline, so the cursor is on an empty row"
+        );
+        s.process(b"no newline here");
+        assert!(
+            !s.tail_row_blank(),
+            "a line still being written occupies the row it is on"
+        );
+        s.process(b"\n");
+        assert!(s.tail_row_blank(), "ending the line frees the row again");
+    }
+
+    /// The `\r` case the issue calls out: a progress bar leaves the cursor at
+    /// column 0 of a row that is full of output, so "the last byte was a
+    /// newline" would get this one wrong in the direction that eats the line.
+    #[test]
+    fn a_carriage_return_redraw_still_occupies_its_row() {
+        let mut s = store_with(20);
+        s.process(b"\r[###-------]  30%");
+        s.process(b"\r[######----]  60%");
+        assert!(
+            !s.tail_row_blank(),
+            "the bar is on the last row whatever column the cursor is in"
+        );
+        s.process(b"\r[##########] 100%\n");
+        assert!(s.tail_row_blank(), "the bar's own newline frees the row");
+    }
+
+    /// The answer describes the grid, not the view, so a reader who has
+    /// scrolled away must still get the grid's answer -- and must not be moved
+    /// by the asking.
+    #[test]
+    fn scrolling_neither_changes_the_answer_nor_is_changed_by_it() {
+        let mut s = store_with(60);
+        s.scroll_up(4);
+        assert_eq!(s.scroll_offset(), 4);
+        s.process(b"one more line\n");
+        assert!(
+            s.tail_row_blank(),
+            "the last grid row is blank however far back the reader is"
+        );
+        assert_eq!(
+            s.scroll_offset(),
+            5,
+            "asking must leave the reader where the new row put them"
+        );
+    }
+
+    /// A rebuild replays the whole buffer into a grid of a different shape, so
+    /// the row that was last is not the row that is last afterwards: twenty
+    /// lines fill a ten-row grid to its last row and leave a forty-row one
+    /// half empty.
+    #[test]
+    fn a_resize_re_asks_which_row_is_last() {
+        let mut s = store_with(20);
+        s.process(b"still writing this one");
+        assert!(!s.tail_row_blank());
+        s.resize(40, 40);
+        assert!(
+            s.tail_row_blank(),
+            "the replay left the partial line well above the new last row"
+        );
+        s.resize(10, 40);
+        assert!(
+            !s.tail_row_blank(),
+            "and back at ten rows the partial line is on the last one again"
+        );
     }
 
     fn store_with(lines: usize) -> LogStore {
