@@ -12,6 +12,13 @@ It's read-only, deliberately. It attaches to containers something else already
 started and never starts, stops, restarts or execs into anything — so it's safe
 to drop into the middle of a script that owns `compose up` and `compose down`.
 
+<p align="center">
+  <img src="demo/demo.gif" width="800"
+       alt="composemux with a nine-service demo stack: the service list on the left, gateway and api pinned open on the right, a job's progress bar, a stack trace, and flaky exiting 42 and turning its row red">
+</p>
+
+<p align="center"><sub>Recorded against the <a href="demo/">demo stack</a> in this repository; <code>demo/record</code> reproduces it.</sub></p>
+
 ## What it does
 
 - **A service list with live status** — running, exited clean, exited non-zero,
