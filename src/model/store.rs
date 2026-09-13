@@ -117,10 +117,10 @@ fn keep_lines_for(scrollback: usize, rows: u16) -> usize {
 /// Floor on the emulated screen size.
 ///
 /// `vt100` underflows in `col_wrap` on very narrow grids, so this is a crash
-/// guard rather than a cosmetic minimum. The pane's own geometry floors itself
-/// at or above both figures -- `MIN_ROWS` exactly for columns, one row higher
-/// for rows, since `log_pane::emulator_size` adds the cursor row on top of its
-/// own floor of three -- so neither ever binds in the render path.
+/// guard rather than a cosmetic minimum. A pane asks for at least as much:
+/// `log_pane::emulator_size` floors columns at `MIN_COLS` exactly, and rows one
+/// above `MIN_ROWS`, because it adds its own `CURSOR_ROW` on top of its floor
+/// of three. So neither ever binds in the render path.
 const MIN_ROWS: u16 = 3;
 const MIN_COLS: u16 = 20;
 
@@ -758,7 +758,9 @@ impl LogStore {
             return;
         }
 
-        // More visible rows means more history to be able to reproduce.
+        // More grid rows means more history to be able to reproduce. The grid
+        // is a row taller than the pane draws, so this is one line more
+        // generous than the window it feeds -- the safe direction.
         self.keep_lines = keep_lines_for(self.scrollback_len, rows);
 
         let old_offset = self.parser.screen().scrollback();

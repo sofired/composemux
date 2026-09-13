@@ -49,7 +49,13 @@ pub struct PaneRender<'a> {
     pub tab_hint: bool,
 }
 
-/// Rows of a pane of this size that `blit_screen` draws into.
+/// Rows of a pane of this size, floored so a tiny pane still gets a usable
+/// grid.
+///
+/// Not the count `blit_screen` draws: that is ratatui's own inner height,
+/// which is this figure or less. The floor is the only place the two part
+/// company, and it binds below seven rows -- an `area.height` of 4, 5, 6 or 7
+/// leaves ratatui an inner height of 0, 1, 2 or 3 against this function's 3.
 fn drawn_rows(area: Rect) -> u16 {
     area.height.saturating_sub(V_CHROME).max(3)
 }
@@ -199,11 +205,20 @@ fn blit_screen(store: &LogStore, inner: Rect, buf: &mut Buffer) {
 /// newest, which is the live line on a pane that has one, and the tail of the
 /// log on a pane too small to draw the whole grid.
 ///
-/// Saturating throughout for that second case. It starts below seven rows,
-/// where `area.height - V_CHROME` falls under `drawn_rows`' floor of three
-/// while ratatui's inner area keeps shrinking: at six rows the grid is four
-/// and the pane draws two, so the surplus is twice [`CURSOR_ROW`] and all of
-/// it comes off the top.
+/// The surplus in that second case does not all come off the top. At six rows
+/// the grid is four and ratatui gives the pane two, so two rows go unshown --
+/// but with a blank last row, which is the ordinary tailing state, the split
+/// is one off the top and the cursor's row off the bottom. Only a live last
+/// row takes both off the top.
+///
+/// The saturation is not for that case, which never reaches it: `first` comes
+/// out strictly positive there with both operands in range. The subtraction
+/// clamps only when the window is at least as tall as the grid, which a pane's
+/// own geometry cannot produce -- ratatui's inner height is `drawn_rows` or
+/// less and the grid is `drawn_rows` plus [`CURSOR_ROW`]. Calling this
+/// directly can, and `a_window_taller_than_the_grid_starts_at_the_top` does.
+/// The `saturating_add` guards a window of `u16::MAX`, which nothing can hand
+/// it either.
 fn first_drawn_row(rows: u16, height: u16, tail_blank: bool) -> u16 {
     rows.saturating_sub(height.saturating_add(u16::from(tail_blank)))
 }
@@ -241,13 +256,14 @@ fn render_scrollbar(store: &LogStore, area: Rect, inner: Rect, buf: &mut Buffer,
     let offset = store.scroll_offset();
     // Row count comes from the emulator's own geometry; materialising the text
     // just to measure it would allocate a String per row on every frame.
-    // Less `CURSOR_ROW`, because the grid is that much taller than the window
-    // the track is measuring: what is left is the rows the pane draws plus the
-    // scrollback behind them. Subtracting unconditionally rather than only
-    // while the last row is blank keeps the track still -- a live progress bar
-    // hides the grid's top row for as long as it is being redrawn, and a
-    // scrollbar that blinked in and out with it would cost more than the row
-    // of precision it bought.
+    // Less `CURSOR_ROW`, which is exactly what the grid grew by, so the track
+    // measures the same total it measured before at every pane size; counting
+    // the extra row instead would put a track on every tailing pane whose grid
+    // has filled. Subtracted unconditionally rather than only while the last
+    // row is blank, which would be the more exact figure by one row: a live
+    // progress bar does hide the grid's top row for as long as it is being
+    // redrawn, and a track blinking in and out with it would cost more than
+    // that row buys.
     let total = (store.screen().size().0 as usize).saturating_sub(CURSOR_ROW as usize) + offset;
     let scrollable = total.saturating_sub(inner.height as usize);
     if scrollable == 0 {
