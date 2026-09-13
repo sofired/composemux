@@ -190,15 +190,20 @@ fn blit_screen(store: &LogStore, inner: Rect, buf: &mut Buffer) {
 /// transition invisible: the newline that ends the line scrolls the grid by
 /// one and the window moves back up by one, so the same rows stay put.
 ///
-/// This is a *visible* row index, and the anchor is what makes that sound: at
-/// scroll offset `k` the emulator's visible rows start `k` rows earlier, so a
-/// window measured back from the grid's bottom is the same window moved back
-/// by `k`, which is what scrolling up is meant to do. Anchoring to the top
-/// would instead have moved the window twice per scroll step.
+/// This is a *visible* row index while `rows` is the grid's own height, and
+/// the two line up only at scroll offset 0. They do not need to: an offset
+/// shifts the whole visible sequence by the same amount, so a window measured
+/// back from the grid's bottom is that same window carried back with it, which
+/// is what scrolling up is meant to do. A top anchor would scroll just as
+/// well and choose wrongly -- it keeps the grid's oldest rows and drops its
+/// newest, which is the live line on a pane that has one, and the tail of the
+/// log on a pane too small to draw the whole grid.
 ///
-/// Saturating throughout for the panes small enough that the grid's own floor
-/// binds: below about seven rows the grid is taller than the pane's inner
-/// area by more than [`CURSOR_ROW`], and the surplus comes off the top.
+/// Saturating throughout for that second case. It starts below seven rows,
+/// where `area.height - V_CHROME` falls under `drawn_rows`' floor of three
+/// while ratatui's inner area keeps shrinking: at six rows the grid is four
+/// and the pane draws two, so the surplus is twice [`CURSOR_ROW`] and all of
+/// it comes off the top.
 fn first_drawn_row(rows: u16, height: u16, tail_blank: bool) -> u16 {
     rows.saturating_sub(height.saturating_add(u16::from(tail_blank)))
 }
