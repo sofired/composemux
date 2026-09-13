@@ -323,7 +323,10 @@ mod tests {
     fn the_window_stays_anchored_to_the_bottom_of_a_grid_it_cannot_fill() {
         // Panes this small are floored at three rows by `drawn_rows` while
         // ratatui gives their inner area one, so the grid runs ahead of the
-        // window by more than the cursor row and the surplus comes off the top.
+        // window by more than the cursor row. The surplus of three splits the
+        // way it always does: two rows off the top with the last row blank,
+        // and the cursor's row off the bottom -- all three off the top only
+        // once a live line occupies that last row.
         assert_eq!(first_drawn_row(4, 1, true), 2);
         assert_eq!(first_drawn_row(4, 1, false), 3);
     }
