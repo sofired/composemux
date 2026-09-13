@@ -28,10 +28,20 @@ Set Framerate 10
 # launch composemux, so the take opens on the service list rather than on a
 # prompt. The `-c` is demo plumbing - it picks the config with nothing pinned -
 # and not the invocation a user types, so it does not belong on camera.
+#
+# record-drive runs a health check, counts down, and prints `go`, then schedules
+# its events at go+22, go+32 and go+40. Wait for `go` rather than a fixed delay,
+# so the tape's interaction clock and record-drive's event clock share one
+# origin; a slow health check then shifts both together instead of sliding the
+# events under the pins. Its output is left on screen (not /dev/null) only so
+# `Wait` can read `go` -- the whole handshake is inside `Hide`, and `clear`
+# wipes the countdown before composemux draws.
 Hide
-Type "export PATH=$PWD/../target/release:$PATH; ./record-drive >/dev/null 2>&1 & clear"
+Type "export PATH=$PWD/../target/release:$PATH; ./record-drive &"
 Enter
-Sleep 500ms
+Wait+Screen@60s /go/
+Type "clear"
+Enter
 Type "composemux -c .composemux.demo.yaml"
 Enter
 Sleep 1500ms
@@ -47,16 +57,26 @@ Sleep 2s
 Down 4
 Sleep 500ms
 Type "1"
-Sleep 12s
+# 9s, not 12: waiting for `go` launches composemux ~2.7s later than the old
+# fixed delay did, so this sleep gives that back to keep the worker pinned just
+# before record-drive's go+22 jobs event, catching the progress bar from 0%.
+Sleep 9s
 
-# ~0:22 - record-drive queues jobs. Swap worker into pane 2 to watch the
-# progress bar draw.
-Down 3
+# ~0:22 - record-drive queues jobs. Swap worker into pane 2 to watch its
+# progress bar draw live. Down 2, not 3: at this point only migrate has exited,
+# so the sidebar is api, cache, db, flaky, gateway, metrics, worker (running,
+# by name), then migrate (exited) last -- worker is two below gateway, and Down 3
+# would land on migrate and replay its finished bar instead.
+Down 2
 Type "2"
 Sleep 9s
 
-# ~0:32 - the traceback lands in api. Swap it back into pane 2.
-Up 7
+# ~0:32 - the traceback lands in api. Swap it back into pane 2. Up 6, not 7:
+# selection is on worker (index 6) after the beat above, the list wraps at the
+# top, and a 7th Up would wrap past api round to migrate at the bottom. Up 6
+# lands on api exactly. (This count is paired with the Down 2 above; changing
+# one without the other pins the wrong service.)
+Up 6
 Type "2"
 Sleep 17s
 
