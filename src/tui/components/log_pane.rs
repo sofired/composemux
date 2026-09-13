@@ -225,11 +225,12 @@ fn first_drawn_row(rows: u16, height: u16, tail_blank: bool) -> u16 {
 
 /// The frame style for one emulator cell.
 ///
-/// `store::cell_is_invisible` is the other half of this: it decides whether
-/// a contentless cell would show anything, and it decides it from the list
-/// below. An attribute added here that is visible on an empty cell -- as
-/// background, underline and inverse are -- has to be added there too, or an
-/// erased last row goes back to being dropped out of the pane's window.
+/// `store::cell_is_invisible` is the other half of this: it decides whether a
+/// cell with no glyph on it -- erased, or holding a space -- would show
+/// anything anyway, and it decides that from the list below. An attribute
+/// added here that is visible on such a cell, as background, underline and
+/// inverse are, has to be added there too, or a last row that is visually
+/// blank but painted goes back to being dropped out of the pane's window.
 fn cell_style(cell: &vt100::Cell) -> Style {
     let mut style = Style::default()
         .fg(convert_color(cell.fgcolor()))

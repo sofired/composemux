@@ -104,12 +104,26 @@ fn last_row_blank(parser: &mut vt100::Parser) -> bool {
 
 /// Whether a cell would put nothing on the frame.
 ///
-/// Not the same as having no contents, which is what this used to ask.
-/// `vt100` keeps the pen on a cell it erases -- `Cell::clear` stores the live
-/// attributes alongside `len = 0` -- so a row wiped under `CSI 41 m` is a row
-/// of contentless cells that `log_pane::cell_style` still paints, as a red
-/// bar. Calling that row blank drops it out of the pane's window, and the bar
-/// with it.
+/// Visually blank, which is neither "no contents" nor "no attributes", and
+/// this asked each of those in turn before it asked both.
+///
+/// Contents first. A cell holding a space is not empty: `\r` only moves the
+/// cursor, so a program that clears a progress line by overwriting it --
+/// `"\rprogress\r        \r"`, which is how a good deal of CLI tooling erases
+/// -- leaves a row of space cells behind. Reading that as content kept a
+/// visually blank row in the pane's window and cost a row of log, which is
+/// #93's own symptom. So the test is whitespace rather than emptiness: Rust's
+/// `char::is_whitespace`, the Unicode `White_Space` property, so a no-break
+/// space or an ideographic space counts too -- each of those draws nothing,
+/// which is the only question being asked. An empty cell passes it trivially.
+///
+/// Attributes second, and still on top rather than instead. `vt100` keeps the
+/// pen on a cell it erases -- `Cell::clear` stores the live attributes
+/// alongside `len = 0` -- so a row wiped under `CSI 41 m` is a row of
+/// contentless cells that `log_pane::cell_style` still paints, as a red bar.
+/// A row of *spaces* written under the same pen is the same red bar, which is
+/// why widening the contents test cannot be allowed to widen the whole
+/// predicate: blank contents and a plain pen, both.
 ///
 /// Which attributes count is decided by two things together: what `cell_style`
 /// emits, and which of those a cell with no glyph can show. It emits
@@ -126,10 +140,10 @@ fn last_row_blank(parser: &mut vt100::Parser) -> bool {
 /// it here would be the same regression by a different name. That is the one
 /// the demo would have hit -- `common.ts` draws its progress bar's timestamp
 /// under `CSI 2 m`. A predicate stricter than the
-/// frame hides nothing; what it does is keep a genuinely empty cursor row on
-/// screen whenever the pen happens to be bold or coloured when a line ends,
-/// which is #93 coming back. `only_the_attributes_a_frame_shows_on_an_empty_
-/// cell_count` pins both directions.
+/// frame hides nothing; what it does is keep a blank cursor row on screen
+/// whenever the pen happens to be bold or coloured when a line ends, which is
+/// #93 coming back. `only_the_attributes_a_frame_shows_on_a_blank_cell_count`
+/// pins both directions.
 ///
 /// The three reads are free; the scan around them is not, and was not before
 /// this either. Measured in release at 50x200, 50k iterations: a blank row
@@ -138,7 +152,9 @@ fn last_row_blank(parser: &mut vt100::Parser) -> bool {
 /// inside the noise. What it buys is a `Screen::cell` call per column, at
 /// about 27 ns each: 5.6 us at 200 columns, 1.1 us at 40, flat in the grid's
 /// row count and in the scrollback depth behind it. A row with content exits
-/// at the first column, in 20 to 40 ns.
+/// at its first non-blank cell: 20 to 40 ns for a row that starts in column
+/// 0, and INDENT_PLACEHOLDER for one indented four columns, which is what this
+/// project's own demo emits for stack-trace frames.
 ///
 /// So the cost is one `Screen::cell` per column of one row per `process`, and
 /// for scale `vt100` parses one log line in about 1 us. A chunk carrying a
@@ -146,7 +162,7 @@ fn last_row_blank(parser: &mut vt100::Parser) -> bool {
 /// chunk carrying fifty pays a few per cent. Worth knowing before anything
 /// widens this to more rows.
 fn cell_is_invisible(cell: &vt100::Cell) -> bool {
-    cell.contents().is_empty()
+    cell.contents().chars().all(char::is_whitespace)
         && cell.bgcolor() == vt100::Color::Default
         && !cell.underline()
         && !cell.inverse()
@@ -1059,15 +1075,50 @@ mod tests {
         );
     }
 
+    /// CodeRabbit on #94 again, the sibling of the erased-row case: `\r` only
+    /// moves the cursor, so a progress line cleared by overwriting it with
+    /// spaces leaves a row of space cells. Those are contents, and reading
+    /// them as content kept a visually blank row in the window and cost a row
+    /// of log -- #93's symptom, by a route the newline tests do not reach.
+    #[test]
+    fn a_row_overwritten_with_spaces_is_blank() {
+        let mut s = store_with(20);
+        s.process(b"\rprogress\r        \r");
+        assert!(
+            s.tail_row_blank(),
+            "a progress line cleared with spaces leaves nothing to show"
+        );
+
+        // Contents and attributes are asked together, not one instead of the
+        // other: the same spaces under a background are a red bar.
+        let mut s = store_with(20);
+        s.process(b"\x1b[41m\rprogress\r        \r");
+        assert!(
+            !s.tail_row_blank(),
+            "spaces under `CSI 41 m` paint the row even though they show no glyph"
+        );
+
+        // And the predicate still finds real content among the blanks.
+        let mut s = store_with(20);
+        s.process(b"\r        x\r");
+        assert!(
+            !s.tail_row_blank(),
+            "one non-blank cell is enough to make the row worth drawing"
+        );
+    }
+
     /// The boundary the predicate sits on, from both sides.
     ///
     /// `cell_style` emits six attributes; only three of them show on a cell
-    /// with no glyph in it. Checking fewer drops a visible row out of the
-    /// pane's window, which is the bug above. Checking more is not safer: it
-    /// would keep the blank cursor row on screen whenever a service happens to
-    /// end a line with a colour or a weight still set, which is #93 again.
+    /// with no glyph in it -- and a cell holding a space has no glyph either,
+    /// so these run over spaces rather than over empty cells, which is the
+    /// case a service actually produces. Checking fewer attributes drops a
+    /// visible row out of the pane's window, which is the bug above. Checking
+    /// more is not safer: it would keep the blank cursor row on screen
+    /// whenever a service happens to end a line with a colour or a weight
+    /// still set, which is #93 again.
     #[test]
-    fn only_the_attributes_a_frame_shows_on_an_empty_cell_count() {
+    fn only_the_attributes_a_frame_shows_on_a_blank_cell_count() {
         for (sgr, blank, what) in [
             (
                 "\x1b[41m",
@@ -1085,9 +1136,15 @@ mod tests {
             ("\x1b[3m", true, "italic slants a glyph that is not there"),
             ("\x1b[2m", true, "`cell_style` does not emit dim at all"),
         ] {
-            let mut s = store_with(20);
-            s.process(format!("{sgr}\x1b[K").as_bytes());
-            assert_eq!(s.tail_row_blank(), blank, "{what}");
+            // Erased, and then the same attributes over printed spaces: the
+            // predicate has to reach the same answer whichever way the row
+            // came to show nothing.
+            for clear in [&b"\x1b[K"[..], b"    \r"] {
+                let mut s = store_with(20);
+                s.process(sgr.as_bytes());
+                s.process(clear);
+                assert_eq!(s.tail_row_blank(), blank, "{what} (cleared with {clear:?})");
+            }
         }
     }
 
