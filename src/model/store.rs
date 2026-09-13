@@ -120,7 +120,12 @@ fn last_row_blank(parser: &mut vt100::Parser) -> bool {
 /// glyph that is not there.
 ///
 /// So this checks exactly three attributes, and adding the other three would
-/// be a regression rather than extra safety. A predicate stricter than the
+/// be a regression rather than extra safety. Six is the size of `cell_style`'s
+/// list, not of `vt100`'s: `Cell` also answers `dim()`, which the renderer
+/// never asks for, so a dim cell is as invisible as a plain one and checking
+/// it here would be the same regression by a different name. That is the one
+/// the demo would have hit -- `common.ts` draws its progress bar's timestamp
+/// under `CSI 2 m`. A predicate stricter than the
 /// frame hides nothing; what it does is keep a genuinely empty cursor row on
 /// screen whenever the pen happens to be bold or coloured when a line ends,
 /// which is #93 coming back. `only_the_attributes_a_frame_shows_on_an_empty_
@@ -1078,6 +1083,7 @@ mod tests {
             ),
             ("\x1b[1m", true, "bold weights a glyph that is not there"),
             ("\x1b[3m", true, "italic slants a glyph that is not there"),
+            ("\x1b[2m", true, "`cell_style` does not emit dim at all"),
         ] {
             let mut s = store_with(20);
             s.process(format!("{sgr}\x1b[K").as_bytes());
