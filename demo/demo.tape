@@ -24,15 +24,18 @@ Set TypingSpeed 40ms
 # saving is the palette, which VHS cannot set from a tape - ./record does it.
 Set Framerate 10
 
-# Off camera: put the release binary on PATH and start the event driver.
+# Off camera: put the release binary on PATH, start the event driver, and
+# launch composemux, so the take opens on the service list rather than on a
+# prompt. The `-c` is demo plumbing - it picks the config with nothing pinned -
+# and not the invocation a user types, so it does not belong on camera.
 Hide
 Type "export PATH=$PWD/../target/release:$PATH; ./record-drive >/dev/null 2>&1 & clear"
 Enter
 Sleep 500ms
-Show
-
 Type "composemux -c .composemux.demo.yaml"
 Enter
+Sleep 1500ms
+Show
 
 # 0:00 - just the service list. The selection starts on api.
 Sleep 6s
