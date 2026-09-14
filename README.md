@@ -1,7 +1,6 @@
 # composemux
 
 [![crates.io](https://img.shields.io/crates/v/composemux.svg)](https://crates.io/crates/composemux)
-[![Downloads](https://img.shields.io/crates/d/composemux.svg)](https://crates.io/crates/composemux)
 [![CI](https://github.com/sofired/composemux/actions/workflows/ci.yml/badge.svg)](https://github.com/sofired/composemux/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Codecov](https://codecov.io/gh/sofired/composemux/graph/badge.svg)](https://codecov.io/gh/sofired/composemux)
