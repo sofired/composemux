@@ -36,53 +36,34 @@ it is safe to drop into the middle of a script that owns `compose up` and
 
 ## Install
 
-The quickest route, if you have a Rust toolchain (MSRV 1.88):
+With a Rust toolchain (MSRV 1.88):
 
 ```sh
 cargo install composemux
 ```
 
-No toolchain? On Linux or macOS Apple Silicon, the installer script fetches the
-right prebuilt binary, verifies its `.sha256`, and drops it in a no-sudo bin
-directory (telling you if that's not already on your `PATH`):
+No toolchain? On Linux or Apple Silicon macOS:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sofired/composemux/main/install.sh | sh
 ```
 
-It's unix-only, and it fails loudly on Intel Macs — there's no prebuilt binary
-for those (GitHub retired its Intel macOS runners), so use `cargo install`
-there. A curl download is never quarantined, so this route also sidesteps the
-Gatekeeper gotcha below.
+Or grab a prebuilt archive from the
+[Releases page](https://github.com/sofired/composemux/releases) — Linux x86-64
+(gnu and musl), Linux aarch64 (gnu), Apple Silicon macOS, and Windows x86-64,
+each with a matching `.sha256`.
 
-Prefer to grab the file yourself? Prebuilt archives are on the
-[Releases page](https://github.com/sofired/composemux/releases) for Linux x86-64
-(gnu and musl), Linux aarch64 (gnu), macOS Apple Silicon, and Windows x86-64;
-each ships a matching `.sha256`.
+**One macOS gotcha, archives only** (the installer above avoids it): the macOS
+build is ad-hoc signed, not notarized, so an archive downloaded in a browser and
+unzipped in Finder gets quarantined and Gatekeeper kills it **silently**.
+Extract from the terminal instead — `tar xzf composemux-*.tar.gz` — or clear the
+flag after the fact with `xattr -d com.apple.quarantine ./composemux`.
 
-**macOS Gatekeeper, one gotcha** — only for the archives, not the installer
-above. The macOS archive is ad-hoc signed, not notarized. If you download it in
-a browser and extract it by double-clicking in Finder, the quarantine flag rides
-along onto the binary and Gatekeeper kills it **silently — no dialog, no
-error.** Sidestep it by extracting from the terminal, which does not propagate
-quarantine:
-
-```sh
-tar xzf composemux-*.tar.gz
-```
-
-Already extracted in Finder? Clear the flag by hand:
-
-```sh
-xattr -d com.apple.quarantine ./composemux
-```
-
-Building from source works anywhere Rust does — the only route for Intel Macs
-and anything else off the list above:
+Or build from source:
 
 ```sh
 cargo build --release        # target/release/composemux
-# or install it onto your PATH straight from a checkout:
+# or straight onto your PATH from a checkout:
 cargo install --path .
 ```
 
