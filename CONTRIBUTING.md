@@ -66,6 +66,29 @@ You'll want Docker to actually drive the thing:
 cargo run -- --project <some-running-compose-project>
 ```
 
+## The demo stack
+
+Need a project to point it at? `demo/` is a self-contained Compose project built
+for exactly that — several services with deliberately different temperaments
+(one chatty, one drawing progress bars, one that exits non-zero on cue), so
+every column in the sidebar and every feature has something to show.
+
+```sh
+cd demo
+./stack up            # bring it up
+composemux            # ...and drive it from another terminal
+./stack down          # tear it down, pulled images and all
+```
+
+`./stack` also triggers activity on demand — `jobs`, `errors`, `crash`,
+`traffic`, `scale`, and more — so you can watch composemux react. The README
+screencast is generated from this stack, too: `./record` runs the `demo.tape`
+[VHS](https://github.com/charmbracelet/vhs) script and re-encodes the GIF.
+
+The full detail — a guided tour, the activity commands, and the recording setup
+(including which VHS version to use) — lives in
+[`demo/README.md`](demo/README.md).
+
 ## Before you open a PR
 
 CI runs these on Linux, macOS and Windows, and they all have to pass:
