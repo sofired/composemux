@@ -170,9 +170,11 @@ auto_exit: 3            # seconds to wait once every service has exited cleanly;
 | `auto_exit` | Seconds to wait once every service has exited cleanly, or `false` to disable. |
 
 Without `--config`, composemux looks for `.composemux.yaml` in the working
-directory and each parent above it, then falls back to a user config file
-(`$XDG_CONFIG_HOME/composemux/config.yaml`, or `~/.config` on Linux and macOS,
-`%APPDATA%` on Windows). A missing file isn't an error — it just runs with
+directory and each parent above it, then falls back to a user config file, in
+order: `$XDG_CONFIG_HOME/composemux/config.yaml`, else
+`~/.config/composemux/config.yaml` whenever `HOME` is set (Linux, macOS, and
+Windows shells like Git Bash), else `%APPDATA%\composemux\config.yaml` on
+native Windows. A missing file isn't an error — it just runs with
 defaults. Unknown keys are rejected rather than ignored, so a typo gets you a
 loud error instead of a pin that quietly never happens.
 
