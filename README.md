@@ -42,26 +42,29 @@ The quickest route, if you have a Rust toolchain (MSRV 1.88):
 cargo install composemux
 ```
 
-No toolchain? Grab a prebuilt archive from the
-[Releases page](https://github.com/sofired/composemux/releases). Builds are
-published for Linux x86-64 (gnu and musl), Linux aarch64 (gnu), macOS Apple
-Silicon, and Windows x86-64; each archive ships a matching `.sha256`.
-
-On **Intel Macs**, build from source — GitHub retired its Intel macOS runners,
-so there is no longer a machine to build that binary on. Same for anything else
-off the list above:
+No toolchain? On Linux or macOS Apple Silicon, the installer script fetches the
+right prebuilt binary, verifies its `.sha256`, and drops it on your PATH:
 
 ```sh
-cargo build --release        # target/release/composemux
-# or install it onto your PATH straight from a checkout:
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/sofired/composemux/main/install.sh | sh
 ```
 
-**macOS Gatekeeper, one gotcha.** The macOS archive is ad-hoc signed, not
-notarized. If you download it in a browser and extract it by double-clicking in
-Finder, the quarantine flag rides along onto the binary and Gatekeeper kills it
-**silently — no dialog, no error.** Sidestep it by extracting from the terminal,
-which does not propagate quarantine:
+It's unix-only, and it fails loudly on Intel Macs — there's no prebuilt binary
+for those (GitHub retired its Intel macOS runners), so use `cargo install`
+there. A curl download is never quarantined, so this route also sidesteps the
+Gatekeeper gotcha below.
+
+Prefer to grab the file yourself? Prebuilt archives are on the
+[Releases page](https://github.com/sofired/composemux/releases) for Linux x86-64
+(gnu and musl), Linux aarch64 (gnu), macOS Apple Silicon, and Windows x86-64;
+each ships a matching `.sha256`.
+
+**macOS Gatekeeper, one gotcha** — only for the archives, not the installer
+above. The macOS archive is ad-hoc signed, not notarized. If you download it in
+a browser and extract it by double-clicking in Finder, the quarantine flag rides
+along onto the binary and Gatekeeper kills it **silently — no dialog, no
+error.** Sidestep it by extracting from the terminal, which does not propagate
+quarantine:
 
 ```sh
 tar xzf composemux-*.tar.gz
@@ -71,6 +74,15 @@ Already extracted in Finder? Clear the flag by hand:
 
 ```sh
 xattr -d com.apple.quarantine ./composemux
+```
+
+Building from source works anywhere Rust does — the only route for Intel Macs
+and anything else off the list above:
+
+```sh
+cargo build --release        # target/release/composemux
+# or install it onto your PATH straight from a checkout:
+cargo install --path .
 ```
 
 ## Use
@@ -164,7 +176,7 @@ exclude: [migrate]
 pinned:  [api, db]      # pane 1 and pane 2 at startup
 tail: 200               # lines of history per service
 scrollback: 1000        # rows retained per service (~7 MB each)
-auto_exit: 3            # seconds to wait once every service has exited; false disables
+auto_exit: 3            # seconds to wait once every service has exited cleanly; false disables
 ```
 
 | Key | Meaning |
