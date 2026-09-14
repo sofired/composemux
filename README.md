@@ -36,19 +36,19 @@ it is safe to drop into the middle of a script that owns `compose up` and
 
 ## Install
 
-With a Rust toolchain (MSRV 1.88):
-
-```sh
-cargo install composemux
-```
-
-No toolchain? On Linux or Apple Silicon macOS:
+On Linux or Apple Silicon macOS:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sofired/composemux/main/install.sh | sh
 ```
 
-Or grab a prebuilt archive from the
+Or, with a Rust toolchain (MSRV 1.88):
+
+```sh
+cargo install composemux
+```
+
+Prefer a file you can check first? Prebuilt archives are on the
 [Releases page](https://github.com/sofired/composemux/releases) — Linux x86-64
 (gnu and musl), Linux aarch64 (gnu), Apple Silicon macOS, and Windows x86-64,
 each with a matching `.sha256`.
