@@ -229,7 +229,15 @@ target="$(detect_target)"
 
 # Private working dir, cleaned up on any exit so we never leave partial state.
 tmp="$(mktemp -d 2>/dev/null || mktemp -d -t composemux)"
-trap 'rm -rf "$tmp"' EXIT INT TERM HUP
+cleanup() { rm -rf "$tmp"; }
+# EXIT cleans up. The signal traps must also TERMINATE: a bare cleanup trap
+# would return and let the script run on, so a Ctrl-C arriving mid-run could
+# still complete the install the user just tried to cancel. Exit with the
+# conventional 128+signal code instead. Armed only now that $tmp exists.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 version="$(resolve_version "$tmp/release.json")"
 tag="v$version"
@@ -273,6 +281,9 @@ src="$tmp/$stem/$BIN"
 # and mv into place so an interrupted copy cannot leave a half-written binary.
 mkdir -p "$INSTALL_DIR"
 dest="$INSTALL_DIR/$BIN"
+# If dest is a directory, `mv` would move the binary *inside* it and succeed,
+# so we would report an install that never replaced the executable. Refuse it.
+[ ! -d "$dest" ] || die "$dest is a directory; cannot install the binary there"
 tmp_dest="$dest.tmp.$$"
 cp "$src" "$tmp_dest"
 chmod 755 "$tmp_dest"
@@ -280,8 +291,9 @@ mv -f "$tmp_dest" "$dest"
 
 info "Installed ${BIN} to ${dest}"
 
-# PATH advice — we do not edit shell rc files silently.
-case ":$PATH:" in
+# PATH advice — we do not edit shell rc files silently. Guard $PATH with :- so
+# an unset PATH (minimal env) does not trip `set -u` after a successful install.
+case ":${PATH:-}:" in
   *":$INSTALL_DIR:"*)
     info "Run '${BIN}' to get started."
     ;;
