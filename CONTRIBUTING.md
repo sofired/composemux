@@ -74,10 +74,11 @@ for exactly that — several services with deliberately different temperaments
 every column in the sidebar and every feature has something to show.
 
 ```sh
+cargo install --path .   # put composemux on your PATH (or run the binary you built)
 cd demo
-./stack up            # bring it up
-composemux            # ...and drive it from another terminal
-./stack down          # tear it down, pulled images and all
+./stack up               # bring the stack up
+composemux               # ...and drive it from a second terminal, also in demo/
+./stack down             # tear the whole stack back down
 ```
 
 `./stack` also triggers activity on demand — `jobs`, `errors`, `crash`,
