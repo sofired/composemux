@@ -49,13 +49,10 @@ cargo install composemux
 Prefer a file you can check first? Prebuilt archives are on the
 [Releases page](https://github.com/sofired/composemux/releases) — Linux x86-64
 (gnu and musl), Linux aarch64 (gnu), Apple Silicon macOS, and Windows x86-64,
-each with a matching `.sha256`.
-
-**One macOS gotcha, archives only** (the installer above avoids it): the macOS
-build is ad-hoc signed, not notarized, so an archive downloaded in a browser and
-unzipped in Finder gets quarantined and Gatekeeper kills it **silently**.
-Extract from the terminal instead — `tar xzf composemux-*.tar.gz` — or clear the
-flag after the fact with `xattr -d com.apple.quarantine ./composemux`.
+each with a matching `.sha256`. On macOS, extract with `tar xzf`, not a Finder
+double-click — Finder quarantines the unnotarized binary and Gatekeeper then
+blocks it silently (`xattr -d com.apple.quarantine ./composemux` clears it if
+you already did).
 
 Or build from source:
 
