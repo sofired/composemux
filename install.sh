@@ -1,0 +1,367 @@
+#!/bin/sh
+# composemux installer — https://github.com/sofired/composemux
+#
+# Install:
+#   curl -fsSL https://raw.githubusercontent.com/sofired/composemux/main/install.sh | sh
+#
+# What it does, in order:
+#   1. Works out which prebuilt target matches this machine.
+#   2. Finds the latest release tag (or honours COMPOSEMUX_VERSION).
+#   3. Downloads the .tar.gz and its .sha256, and VERIFIES the checksum
+#      before touching anything — a pipe-to-shell installer must.
+#   4. Extracts and installs the binary into a no-sudo directory.
+#
+# It never runs downloaded content: the only thing executed is the verified
+# composemux binary, and only after the checksum matches. Nothing is written
+# outside a private temp dir until that check passes.
+#
+# Environment overrides:
+#   COMPOSEMUX_VERSION      Pin a version (e.g. 0.1.0). Default: latest release.
+#   COMPOSEMUX_INSTALL_DIR  Where to install (used verbatim). Default: the first
+#                           of ~/.local/bin, ~/bin, ~/.cargo/bin already on PATH,
+#                           else ~/.local/bin.
+#   COMPOSEMUX_API_URL      GitHub "latest release" JSON endpoint. For testing.
+#   COMPOSEMUX_BASE_URL     Release-download base URL. For testing/mirrors.
+#
+# POSIX sh only — it is piped into `sh`. No bashisms; passes `shellcheck -s sh`.
+
+set -eu
+
+REPO="sofired/composemux"
+BIN="composemux"
+API_URL="${COMPOSEMUX_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
+BASE_URL="${COMPOSEMUX_BASE_URL:-https://github.com/${REPO}/releases/download}"
+# INSTALL_DIR is resolved just before installing (resolve_install_dir), once the
+# helper functions below are defined.
+
+info() { printf '%s\n' "$*"; }
+err()  { printf '%s\n' "composemux install: $*" >&2; }
+die()  { err "$*"; exit 1; }
+
+# on_path <dir> — true if <dir> is a literal entry in $PATH. $PATH is guarded so
+# an unset PATH (minimal env) does not trip `set -u`.
+on_path() {
+  case ":${PATH:-}:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# writable_dir <dir> — true if we could install into <dir>: it exists and is
+# writable, OR it does not exist yet and $HOME is writable (so `mkdir -p` under
+# $HOME would create it). Only tests; creates and touches nothing.
+writable_dir() {
+  if [ -d "$1" ]; then
+    [ -w "$1" ]
+  elif [ -e "$1" ]; then
+    return 1  # exists but is not a directory — unusable
+  else
+    [ -n "${HOME:-}" ] && [ -w "$HOME" ]
+  fi
+}
+
+# resolve_install_dir — echo the directory to install into.
+#   * COMPOSEMUX_INSTALL_DIR set  -> use it verbatim (explicit override wins,
+#     even if it is not on PATH — the caller then prints PATH guidance).
+#   * otherwise pick the FIRST candidate that is BOTH already on $PATH AND
+#     installable, in this order: $HOME/.local/bin, $HOME/bin,
+#     ${CARGO_HOME:-$HOME/.cargo}/bin. So Rust users (cargo's bin is on PATH)
+#     and the common ~/.local/bin case never see a PATH message.
+#   * if none is on PATH -> default to $HOME/.local/bin (created below), and the
+#     caller prints guidance.
+resolve_install_dir() {
+  if [ -n "${COMPOSEMUX_INSTALL_DIR:-}" ]; then
+    printf '%s\n' "$COMPOSEMUX_INSTALL_DIR"
+    return
+  fi
+  [ -n "${HOME:-}" ] || die "HOME is not set; set COMPOSEMUX_INSTALL_DIR to choose where to install"
+  for d in "$HOME/.local/bin" "$HOME/bin" "${CARGO_HOME:-$HOME/.cargo}/bin"; do
+    if on_path "$d" && writable_dir "$d"; then
+      printf '%s\n' "$d"
+      return
+    fi
+  done
+  printf '%s\n' "$HOME/.local/bin"
+}
+
+# print_path_guidance <dir> — persistent, shell-specific copy-paste line to add
+# <dir> to PATH. Printed guidance only; we never edit an rc file ourselves. The
+# shell is chosen by the basename of $SHELL; fish uses its own PATH command, not
+# an `export` line.
+print_path_guidance() {
+  shell_path="${SHELL:-}"
+  shell_name="${shell_path##*/}"
+  case "$shell_name" in
+    zsh)  add="echo 'export PATH=\"$1:\$PATH\"' >> ~/.zshrc" ;;
+    bash) add="echo 'export PATH=\"$1:\$PATH\"' >> ~/.bashrc" ;;
+    fish) add="fish_add_path $1" ;;
+    *)    add="echo 'export PATH=\"$1:\$PATH\"' >> ~/.profile" ;;
+  esac
+  info ""
+  info "$1 is not on your PATH. Add it with:"
+  info "    $add"
+  info "then restart your shell."
+}
+
+# --- Tooling: prefer curl, fall back to wget; require a sha256 tool ----------
+
+if command -v curl >/dev/null 2>&1; then
+  DOWNLOADER=curl
+elif command -v wget >/dev/null 2>&1; then
+  DOWNLOADER=wget
+else
+  die "need curl or wget to download files, found neither"
+fi
+
+# macOS ships `shasum`; most Linux ships `sha256sum`. Prefer sha256sum, then
+# fall back to `shasum -a 256`. Both print "<hex>  <file>", so the hash is the
+# first whitespace-delimited field either way.
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA_TOOL=sha256sum
+elif command -v shasum >/dev/null 2>&1; then
+  SHA_TOOL=shasum
+else
+  die "need sha256sum or shasum to verify the download, found neither"
+fi
+
+# download <url> <dest-file>. Fails non-zero on any HTTP or network error.
+download() {
+  if [ "$DOWNLOADER" = curl ]; then
+    case "$1" in
+      https://*)
+        # The real path. Pin the transport to HTTPS/TLS 1.2+ and forbid a
+        # redirect from downgrading it to plaintext — GitHub redirects the
+        # release-asset URL to a CDN, and that hop must stay HTTPS.
+        curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2"
+        ;;
+      *)
+        # A non-HTTPS URL is only ever reached through an explicit COMPOSEMUX_*
+        # override (a mock server or a mirror). Still forbid a redirect from
+        # switching protocols underneath us.
+        curl -fsSL --proto-redir '=https' "$1" -o "$2"
+        ;;
+    esac
+  else
+    # wget fallback. The default URLs are HTTPS; --https-only is not portable to
+    # busybox wget, so transport safety rests on the https:// URLs themselves.
+    wget -q -O "$2" "$1"
+  fi
+}
+
+# sha256 <file> — print "<hex>  <file>" using whichever tool we found.
+sha256() {
+  if [ "$SHA_TOOL" = sha256sum ]; then
+    sha256sum "$1"
+  else
+    shasum -a 256 "$1"
+  fi
+}
+
+# --- Target detection --------------------------------------------------------
+
+# libc_variant — on x86_64 Linux we ship both a glibc (gnu) and a musl build.
+# Prefer gnu, but pick musl when this system's C library is musl (e.g. Alpine),
+# because a glibc-linked binary will not run there.
+#
+# Rule: `ldd --version` prints "ldd (GNU libc) ..." on glibc and a banner
+# containing "musl" on musl. glibc prints it to stdout, musl to stderr, so we
+# fold stderr into stdout (2>&1) and look for "musl". If ldd is unavailable, we
+# fall back to probing for a musl dynamic loader on disk; absent both signals we
+# assume gnu, the common case.
+libc_variant() {
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    echo musl
+    return
+  fi
+  for f in /lib/ld-musl-*.so.* /lib/libc.musl-*.so.*; do
+    if [ -e "$f" ]; then
+      echo musl
+      return
+    fi
+  done
+  echo gnu
+}
+
+# detect_target — echo the Rust target triple for this machine, or exit with a
+# clear message for platforms we do not publish a prebuilt binary for. `uname`
+# is overridable via the `uname` shell function tests can define.
+detect_target() {
+  os="$(uname -s)"
+  arch="$(uname -m)"
+
+  case "$arch" in
+    x86_64 | amd64) arch=x86_64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+  esac
+
+  case "$os" in
+    Linux)
+      case "$arch" in
+        # x86_64 Linux ships both a glibc and a musl build.
+        x86_64) echo "x86_64-unknown-linux-$(libc_variant)" ;;
+        # aarch64 Linux ships glibc ONLY — there is no aarch64-musl artifact.
+        # On a musl arm64 box (e.g. Alpine) the glibc archive would download,
+        # its checksum would verify, and it would then fail to exec with a
+        # cryptic loader error. Refuse it the way the Intel-Mac case does.
+        arm64)
+          if [ "$(libc_variant)" = musl ]; then
+            err "aarch64 Linux has no musl prebuilt binary (only glibc is built)."
+            err "Install from source with a Rust toolchain instead:"
+            err "    cargo install ${BIN}"
+            exit 1
+          fi
+          echo "aarch64-unknown-linux-gnu"
+          ;;
+        *) die "unsupported Linux architecture: $(uname -m)" ;;
+      esac
+      ;;
+    Darwin)
+      case "$arch" in
+        arm64) echo "aarch64-apple-darwin" ;;
+        x86_64)
+          # No Intel-macOS build exists: GitHub retired its Intel runners, so
+          # there is no machine to produce x86_64-apple-darwin. Do not hand an
+          # Intel Mac the arm64 archive — send them to a from-source build.
+          err "Intel Macs (x86_64-apple-darwin) have no prebuilt binary."
+          err "Install from source with a Rust toolchain instead:"
+          err "    cargo install ${BIN}"
+          exit 1
+          ;;
+        *) die "unsupported macOS architecture: $(uname -m)" ;;
+      esac
+      ;;
+    *)
+      die "unsupported operating system: $os (this installer serves Linux and macOS)"
+      ;;
+  esac
+}
+
+# --- Version discovery -------------------------------------------------------
+
+# All release tags are "vX.Y.Z" (release.yml triggers on "v*" and strips the
+# leading "v" for asset names). We normalise any override the same way, so both
+# `0.1.0` and `v0.1.0` work.
+# validate_version — a version string becomes part of a URL and a filesystem
+# path, and (for the API path) it originates in JSON from a host the user can
+# override. Shape-check it before it is used anywhere: allow only digits,
+# letters, dot, plus and hyphen (enough for any semver, including pre-release
+# and build metadata), require a leading digit, and reject "..". This blocks
+# path traversal, whitespace, and shell metacharacters.
+validate_version() {
+  case "$1" in
+    "") die "empty version string" ;;
+    *[!0-9A-Za-z.+-]*) die "unexpected version string: $1" ;;
+  esac
+  case "$1" in
+    [0-9]*) : ;;
+    *) die "unexpected version string: $1" ;;
+  esac
+  case "$1" in
+    *..*) die "unexpected version string: $1" ;;
+  esac
+}
+
+resolve_version() {
+  if [ -n "${COMPOSEMUX_VERSION:-}" ]; then
+    v="${COMPOSEMUX_VERSION#v}"
+    validate_version "$v"
+    printf '%s\n' "$v"
+    return
+  fi
+  json="$1"
+  if ! download "$API_URL" "$json"; then
+    # download() failed: the endpoint could not be fetched at all.
+    die "could not fetch the release list from $API_URL (network error or host unreachable)"
+  fi
+  # Extract tag_name without a jq dependency. GitHub returns it as
+  #   "tag_name": "v0.1.0"
+  tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | head -n1)"
+  # We reached the API but found no tag_name — e.g. a 404 when no release has
+  # been published yet, or a rate-limit / error JSON. That is not a network
+  # problem, so say so distinctly.
+  [ -n "$tag" ] || die "no release found at $API_URL (the response had no tag_name — no published release yet, or a rate-limit/error response)"
+  v="${tag#v}"
+  validate_version "$v"
+  printf '%s\n' "$v"
+}
+
+# --- Main --------------------------------------------------------------------
+
+target="$(detect_target)"
+
+# Private working dir, cleaned up on any exit so we never leave partial state.
+tmp="$(mktemp -d 2>/dev/null || mktemp -d -t composemux)"
+cleanup() { rm -rf "$tmp"; }
+# EXIT cleans up. The signal traps must also TERMINATE: a bare cleanup trap
+# would return and let the script run on, so a Ctrl-C arriving mid-run could
+# still complete the install the user just tried to cancel. Exit with the
+# conventional 128+signal code instead. Armed only now that $tmp exists.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
+
+version="$(resolve_version "$tmp/release.json")"
+tag="v$version"
+
+stem="${BIN}-${version}-${target}"
+archive="${stem}.tar.gz"
+archive_url="${BASE_URL}/${tag}/${archive}"
+checksum_url="${archive_url}.sha256"
+
+info "Installing ${BIN} ${version} (${target})"
+
+# Download the archive and its published checksum.
+if ! download "$archive_url" "$tmp/$archive"; then
+  die "failed to download $archive_url"
+fi
+if ! download "$checksum_url" "$tmp/$archive.sha256"; then
+  die "failed to download $checksum_url"
+fi
+
+# Verify BEFORE extracting. Compare only the hex digest: the published file
+# records a bare filename (shasum was run inside dist/), which will not match
+# our temp path under `shasum -c`, so we check the digests directly.
+expected="$(awk '{print $1}' "$tmp/$archive.sha256")"
+actual="$(sha256 "$tmp/$archive" | awk '{print $1}')"
+[ -n "$expected" ] || die "published checksum file was empty"
+if [ "$expected" != "$actual" ]; then
+  err "checksum mismatch for $archive — refusing to install."
+  err "  expected: $expected"
+  err "  actual:   $actual"
+  die "aborting; nothing was installed"
+fi
+info "Checksum verified."
+
+# Extract into the temp dir. The archive holds a single directory,
+#   composemux-<version>-<target>/composemux
+tar xzf "$tmp/$archive" -C "$tmp"
+src="$tmp/$stem/$BIN"
+[ -f "$src" ] || die "archive did not contain $stem/$BIN"
+
+# Resolve the install dir now that all helpers are defined (prefers a dir
+# already on PATH; see resolve_install_dir).
+INSTALL_DIR="$(resolve_install_dir)"
+
+# Install into a no-sudo directory. Write to a temp name in the same directory
+# and mv into place so an interrupted copy cannot leave a half-written binary.
+mkdir -p "$INSTALL_DIR"
+dest="$INSTALL_DIR/$BIN"
+# If dest is a directory, `mv` would move the binary *inside* it and succeed,
+# so we would report an install that never replaced the executable. Refuse it.
+[ ! -d "$dest" ] || die "$dest is a directory; cannot install the binary there"
+tmp_dest="$dest.tmp.$$"
+cp "$src" "$tmp_dest"
+chmod 755 "$tmp_dest"
+mv -f "$tmp_dest" "$dest"
+
+info "Installed ${BIN} to ${dest}"
+
+# PATH advice — we do not edit shell rc files silently. If the resolved dir is
+# already on PATH (the common case, since we prefer such a dir), there is
+# nothing to add; otherwise print persistent, shell-specific guidance.
+if on_path "$INSTALL_DIR"; then
+  info "Run '${BIN}' to get started."
+else
+  print_path_guidance "$INSTALL_DIR"
+fi
