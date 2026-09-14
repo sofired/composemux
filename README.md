@@ -18,8 +18,6 @@ it is safe to drop into the middle of a script that owns `compose up` and
        alt="composemux with a nine-service demo stack: the service list on the left, gateway and api pinned open on the right, a job's progress bar, a stack trace, and flaky exiting 42 and turning its row red">
 </p>
 
-<p align="center"><sub>Recorded against the <a href="demo/">demo stack</a> in this repository; <code>demo/record</code> reproduces it.</sub></p>
-
 ## What it does
 
 - **A service list with live status** — running, exited clean, exited non-zero,
