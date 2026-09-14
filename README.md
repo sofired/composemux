@@ -43,7 +43,8 @@ cargo install composemux
 ```
 
 No toolchain? On Linux or macOS Apple Silicon, the installer script fetches the
-right prebuilt binary, verifies its `.sha256`, and drops it on your PATH:
+right prebuilt binary, verifies its `.sha256`, and drops it in a no-sudo bin
+directory (telling you if that's not already on your `PATH`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sofired/composemux/main/install.sh | sh
