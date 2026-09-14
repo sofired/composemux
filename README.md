@@ -1,16 +1,17 @@
 # composemux
 
 Six services, one interleaved stream, and the stack trace you actually needed
-has already scrolled off the top. `docker compose logs -f` shows you
-everything at once and gives you no way to say "keep the API in front of me
-while I poke at the others."
+has already scrolled off the top. `docker compose logs -f` shows you everything
+at once and gives you no way to say "keep the API in front of me while I poke at
+the others."
 
-composemux does that one thing: your services down the left with live status,
-and up to two log panes you can pin open.
+composemux does exactly that one thing: your services down the left with live
+status, and up to two log panes you can pin open.
 
-It's read-only, deliberately. It attaches to containers something else already
-started and never starts, stops, restarts or execs into anything — so it's safe
-to drop into the middle of a script that owns `compose up` and `compose down`.
+It is **read-only, on purpose.** It attaches to containers something else
+already started and never starts, stops, restarts, or execs into anything — so
+it is safe to drop into the middle of a script that owns `compose up` and
+`compose down`.
 
 <p align="center">
   <img src="demo/demo.gif" width="800"
@@ -27,23 +28,50 @@ to drop into the middle of a script that owns `compose up` and `compose down`.
 - **Real container state**, read from the Docker Engine API rather than scraped
   out of `docker compose logs`: actual statuses, actual exit codes, and a
   reattach when a container restarts under a new ID.
-- **Output that renders properly.** ANSI colour, `\r` progress bars and
+- **Output that renders properly.** ANSI colour, `\r` progress bars, and
   forty-line Java stack traces all go through a vt100 emulator first.
-- **Copy that survives SSH** — `c` copies the pane via OSC 52.
-- **Sensible behaviour when nobody's watching.** Piped or in CI, it drops the
-  UI and streams plain prefixed lines instead of a screenful of escape codes.
+- **Copy that survives SSH** — `c` copies the focused pane via OSC 52.
+- **Sensible behaviour when nobody's watching.** Piped or in CI, it drops the UI
+  and streams plain prefixed lines instead of a screenful of escape codes.
 
 ## Install
+
+The quickest route, if you have a Rust toolchain (MSRV 1.88):
 
 ```sh
 cargo install composemux
 ```
 
-Prebuilt binaries are attached to each
-[release](https://github.com/sofired/composemux/releases) for Linux (x86-64 gnu
-and musl, arm64), macOS (Apple Silicon) and Windows (x86-64). On Intel Macs,
-build from source — GitHub retired its Intel macOS runners, so there's no
-longer a machine to build that binary on.
+No toolchain? Grab a prebuilt archive from the
+[Releases page](https://github.com/sofired/composemux/releases). Builds are
+published for Linux x86-64 (gnu and musl), Linux aarch64 (gnu), macOS Apple
+Silicon, and Windows x86-64; each archive ships a matching `.sha256`.
+
+On **Intel Macs**, build from source — GitHub retired its Intel macOS runners,
+so there is no longer a machine to build that binary on. Same for anything else
+off the list above:
+
+```sh
+cargo build --release        # target/release/composemux
+# or install it onto your PATH straight from a checkout:
+cargo install --path .
+```
+
+**macOS Gatekeeper, one gotcha.** The macOS archive is ad-hoc signed, not
+notarized. If you download it in a browser and extract it by double-clicking in
+Finder, the quarantine flag rides along onto the binary and Gatekeeper kills it
+**silently — no dialog, no error.** Sidestep it by extracting from the terminal,
+which does not propagate quarantine:
+
+```sh
+tar xzf composemux-*.tar.gz
+```
+
+Already extracted in Finder? Clear the flag by hand:
+
+```sh
+xattr -d com.apple.quarantine ./composemux
+```
 
 ## Use
 
@@ -73,7 +101,7 @@ composemux --project my-stack --pin api --pin worker
 
 ## Keys
 
-Press `?` and it'll tell you all of this. But for the skimmers:
+Press `?` for the whole list in-app. For the skimmers:
 
 **In the service list**
 
@@ -90,18 +118,15 @@ Press `?` and it'll tell you all of this. But for the skimmers:
 | `/` | Filter services; `enter` confirms, `esc` clears |
 
 Pinning is idempotent in the way you'd hope: pressing `1` or `2` on a service
-that's already in that pane unpins it, and pinning something sitting in the
-*other* pane moves it across rather than opening a second copy of the same
-logs.
+already in that pane unpins it, and pinning something sitting in the *other*
+pane moves it across rather than opening a second copy of the same logs.
 
 Full screen is a stronger version of `b`: hiding the list still leaves two
-pinned panes splitting the frame, whereas `enter` on a focused pane gives it
-everything. It's modal while it lasts — the keys that would put the list or the
-other pane back are ignored, and `enter` doesn't toggle back out — and `esc`
-restores the arrangement exactly as it was, hidden list included, without also
-giving up the pane. Press `esc` a second time for the service list — unless you
-had hidden it with `b`, in which case it stays hidden and focus stays where it
-is.
+pinned panes splitting the frame, whereas `enter` on a focused pane gives it the
+whole frame. It's modal while it lasts — keys that would restore the list or the
+other pane are ignored — and `esc` puts the arrangement back exactly as it was,
+hidden list included. Press `esc` again for the service list, unless you had
+hidden it with `b`, in which case it stays hidden.
 
 **In an output pane**
 
@@ -113,22 +138,20 @@ is.
 | `c` | Copy the buffer to the clipboard |
 | `enter` | Full screen: this pane takes the frame, list and all |
 | `esc` | Leave full screen if it's on, otherwise back to the service list |
-| `esc` (again) | After full screen: back to the service list, if it's showing |
 
 **Anywhere:** `?` help · `q` quit · `ctrl+c` interrupt · `F10` toggle mouse
 capture.
 
-Scroll up to read something and it stays where you put it as new output
-arrives, rather than drifting off the top. It only moves once the lines you are
-looking at fall out of the buffer entirely — `scrollback`, 1000 rows by default.
-Raise it if you need to hold a position for longer; it costs roughly 7 MB per
-service per 1000 rows.
+Scroll up to read something and it stays put as new output arrives, rather than
+drifting off the top. It only moves once the lines you're looking at fall out of
+the buffer entirely — `scrollback`, 1000 rows by default. Raise it to hold a
+position longer; it costs roughly 7 MB per service per 1000 rows.
 
-Copying sends an OSC 52 escape sequence, handing the buffer straight to your
+Copy sends an OSC 52 escape sequence, handing the buffer straight to your
 terminal emulator — so it works when composemux is running on a remote box over
-SSH, with nothing installed at that end. Default builds then also make a
-best-effort write to the native clipboard, for terminals that ignore OSC 52.
-That second path is what `--no-default-features` drops.
+SSH, with nothing installed at that end. Default builds also make a best-effort
+write to the native clipboard, for terminals that ignore OSC 52; that second
+path is what `--no-default-features` drops.
 
 ## Configuration
 
@@ -157,17 +180,15 @@ auto_exit: 3            # seconds to wait once every service has exited; false d
 Without `--config`, composemux looks for `.composemux.yaml` in the working
 directory and each parent above it, then falls back to a user config file
 (`$XDG_CONFIG_HOME/composemux/config.yaml`, or `~/.config` on Linux and macOS,
-or `%APPDATA%` on Windows). A missing file isn't an error — it just runs with
-defaults.
-
-Unknown keys are rejected rather than ignored, so a typo gets you a loud error
-instead of a pin that quietly never happens.
+`%APPDATA%` on Windows). A missing file isn't an error — it just runs with
+defaults. Unknown keys are rejected rather than ignored, so a typo gets you a
+loud error instead of a pin that quietly never happens.
 
 ## Driving it from a script
 
 composemux is built to sit inside a wrapper that owns the Compose lifecycle:
-bring the project up, block on the TUI, tear down when it exits. The parts of
-its behaviour that matter to that caller:
+bring the project up, block on the TUI, tear down when it exits. What matters to
+that caller:
 
 - **Exit codes.** `0` when the user quits with `q` or the stack exits on its
   own, `130` on `ctrl+c`, non-zero on error — so the wrapper can tell a
@@ -178,11 +199,10 @@ its behaviour that matter to that caller:
 - **Non-TTY output** falls back to plain prefixed lines automatically, so a
   piped run doesn't write escape sequences into a log file.
 - **Auto-exit.** Once every service has exited *cleanly*, a countdown appears
-  and composemux closes so the wrapper can clean up. Any keypress cancels it.
-  If any service exited non-zero the countdown doesn't run at all — "everything
-  exited" usually means the stack fell over, and the moment after a crash is
-  the worst possible time for your log viewer to helpfully disappear and let a
-  script tear down the evidence.
+  and composemux closes so the wrapper can clean up; any keypress cancels it. If
+  any service exited non-zero the countdown doesn't run at all — the moment
+  after a crash is the worst possible time for your log viewer to disappear and
+  let a script tear down the evidence.
 
 One caveat: invoke the binary directly rather than through a task runner that
 captures child output. A TUI nested inside another TUI renders neither.
@@ -190,98 +210,54 @@ captures child output. A TUI nested inside another TUI renders neither.
 ## How it works
 
 Logs come from the Docker Engine API, not from parsing `docker compose logs`
-output. That's what buys the per-service streams, the real container statuses
-and the exit codes. A supervisor watches Docker events, so a container that
-restarts — and therefore gets a new ID — is picked back up, and services
-created after startup show up on their own.
+output — that's what buys the per-service streams, the real statuses, and the
+exit codes. A supervisor watches Docker events, so a container that restarts
+(and gets a new ID) is picked back up, and services created after startup show
+up on their own.
 
-If a container's log stream drops while the container keeps running (a daemon
-restart, say), reconnecting resumes from a one-second boundary, because that's
-the finest resolution the Engine API offers here. A couple of already-visible
-lines can reappear as a result. That's the deliberate trade: a duplicated line
-beats a missing one.
+If a log stream drops while its container keeps running (a daemon restart, say),
+reconnecting resumes from a one-second boundary, the finest resolution the
+Engine API offers here. A couple of already-visible lines can reappear as a
+result — the deliberate trade: a duplicated line beats a missing one.
 
 If the daemon stops answering, composemux keeps retrying rather than exiting,
-and the status bar says so, so a frozen screen can't be mistaken for a quiet
-stack. Which note you get depends on how it's failing, because the three send
-you to different places:
+and the status bar says which way it's failing, since the three point you
+somewhere different:
 
 - `Docker daemon unreachable - retrying` — nothing was reached. Start Docker.
 - `Docker daemon not answering - retrying` — the request was taken and never
-  came back. Docker is running; it's wedged, and restarting composemux won't
-  help.
-- `Docker daemon rejected the request - retrying` — the request was refused
-  rather than lost: Docker answered with an error of its own, or the socket
-  wouldn't let composemux open it. Starting Docker is the one remedy this
-  rules out. Run with `COMPOSEMUX_DEBUG=1` and the actual error is written to
-  `composemux.log` in your temp directory.
+  came back. Docker is running but wedged; restarting composemux won't help.
+- `Docker daemon rejected the request - retrying` — refused rather than lost.
+  Run with
+  `COMPOSEMUX_DEBUG=1` and the actual error lands in `composemux.log` in your
+  temp directory.
 
-  Being unable to open the socket usually stops you before this, at startup,
-  with the error printed rather than a note in the bar — this is the note for
-  a daemon that starts refusing while composemux is already running.
+Statuses and logs hold at their last known values until the daemon answers
+again, at which point the note clears itself. It takes a short run of failed
+polls to appear, so a single dropped request never flashes it. (Startup has no
+status bar yet, so a daemon that goes quiet during connect prints to stderr
+after five seconds — including which `DOCKER_HOST` it's waiting on — and keeps
+waiting; a daemon still coming up is a normal thing for a wrapper to race.)
 
-Statuses and logs stay at their last known values until it answers again, at
-which point the note clears on its own. It takes a short run of failed polls to
-appear, so a single dropped request never flashes it.
+Everything then passes through a `vt100` terminal emulator before it reaches the
+screen, which is why colour, cursor movement, and progress bars behave rather
+than smearing across the UI. It's also a safety property: container logs are
+untrusted input, and they're never handed to your terminal verbatim.
 
-Startup has no status bar to write into, so a daemon that takes the connection
-and goes quiet used to leave you with a blank terminal. After five seconds it
-says on stderr that it's still waiting, and which `DOCKER_HOST` it's waiting
-on, repeating every thirty seconds. It keeps waiting either way: a daemon
-that's still coming up is a normal thing for a wrapper script to race.
+## Good to know
 
-Everything then goes through a `vt100` terminal emulator before it reaches the
-screen, which is why colour, cursor movement and progress bars behave rather
-than smearing themselves across the UI. It's also a safety property — container
-logs are untrusted input, and they're never passed through to your terminal
-verbatim.
-
-## Known limitations
-
-Two ways a Compose project can surprise composemux, both worth knowing before
-you go looking for the bug in your own service.
-
-**A `tty: true` service that writes without newlines will look stalled.** Set
-`tty: false` and it streams as it should. That's the whole remedy — with the
-caveat that the service then sees a pipe rather than a terminal, so anything
-that checks for one — a `\r` progress bar redrawing in place, say — will render
-differently. `tty: true` isn't Compose's default, so this only bites a service
-that asked for one.
-
-What's going on: the daemon splits a log message at 16 KiB whether or not the
-service has a tty, and what a tty removes is the per-write header saying where
-each split falls. The Docker client composemux reads logs through (bollard)
-then has nothing to frame on, scans for a newline instead, and holds the
-daemon's chunks until one arrives. Measured: a service writing 48 KiB with no
-newline in it delivers three 16 KiB pieces over eleven seconds without a tty;
-with one, nothing at all for those eleven seconds and then all three at once.
-Output that never contains a newline is held, in memory, until the stream ends.
-The framing is settled inside the Docker client before composemux sees a byte,
-so there's nothing to fix at this layer;
-[#38](https://github.com/sofired/composemux/issues/38) tracks the upstream
-change. Ordinary line-oriented output isn't affected: the newline ending each
-line releases it, so nothing accumulates.
-
-**Replicas are told apart by a Compose label.** composemux reads
-`com.docker.compose.container-number` to decide which replica of a scaled
-service a container is, and reads a container without that label as replica 1.
-Compose v5.5.0 sets it on every container composemux follows — unscaled
-services and `container_name:` overrides alike — so it's unlikely to be a
-limitation you meet. A Compose version that omitted it on a scaled service
-would give every replica the same identity: a row each in the sidebar for as
-long as they're running, all carrying the same name, and one log buffer behind
-them all, holding their output interleaved with no way to separate them.
-There's nothing to configure at this end, and nothing to fix for an unscaled
-service — only a scaled one needs a Compose that sets the label.
-[#51](https://github.com/sofired/composemux/issues/51) has the detail.
+A `tty: true` service that writes without a trailing newline can look stalled;
+set `tty: false` and it streams as it should
+([#38](https://github.com/sofired/composemux/issues/38) has the mechanism — it's
+upstream, in how Docker frames tty log output).
 
 ## Contributing
 
 Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the
-test conventions, and one constraint worth two minutes of your time before you
-spend an afternoon on a keybinding: composemux's interaction model is adapted
-from the [Nx terminal UI](https://nx.dev/blog/nx-21-terminal-ui), and matching
-it is deliberate rather than incidental.
+test conventions, and one constraint worth two minutes before you spend an
+afternoon on a keybinding: composemux's interaction model is adapted from the
+[Nx terminal UI](https://nx.dev/blog/nx-21-terminal-ui), and matching it is
+deliberate rather than incidental.
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). For
 security issues, please report privately — see [SECURITY.md](SECURITY.md) —
@@ -289,19 +265,19 @@ rather than opening an issue.
 
 ## Attribution
 
-composemux's terminal UI — its layout, pinning model, colours and keys — is
+composemux's terminal UI — its layout, pinning model, colours, and keys — is
 adapted from the Nx terminal UI, which is MIT licensed and copyright 2017-2026
 Narwhal Technologies Inc. The full upstream notice is in
 [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY), and modules derived from Nx name
-their upstream file in a header comment. If you already use the Nx TUI, the
-keys and the layout here are the same on purpose.
+their upstream file in a header comment. If you already use the Nx TUI, the keys
+and layout here are the same on purpose.
 
-composemux is an independent project. It is not affiliated with, endorsed by,
-or sponsored by Nrwl / Nx.
+composemux is an independent project. It is **not affiliated with, endorsed by,
+or sponsored by Nrwl / Nx.**
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
-Contributions are accepted under the same licence (inbound = outbound). You
-keep the copyright in your own work; there is no CLA.
+Contributions are accepted under the same licence (inbound = outbound). You keep
+the copyright in your own work; there is no CLA.
