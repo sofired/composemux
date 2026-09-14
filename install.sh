@@ -1,7 +1,7 @@
 #!/bin/sh
 # composemux installer — https://github.com/sofired/composemux
 #
-# Usage (as documented in the README):
+# Install:
 #   curl -fsSL https://raw.githubusercontent.com/sofired/composemux/main/install.sh | sh
 #
 # What it does, in order:
@@ -29,6 +29,12 @@ REPO="sofired/composemux"
 BIN="composemux"
 API_URL="${COMPOSEMUX_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
 BASE_URL="${COMPOSEMUX_BASE_URL:-https://github.com/${REPO}/releases/download}"
+# Fall back to $HOME only when it is set; on a minimal container/CI where HOME
+# is unset, `set -u` would otherwise abort with a cryptic "HOME: parameter not
+# set". Require one of the two to be set, with a message that names the fix.
+if [ -z "${COMPOSEMUX_INSTALL_DIR:-}" ]; then
+  : "${HOME:?composemux install: HOME is not set; set COMPOSEMUX_INSTALL_DIR to choose where to install}"
+fi
 INSTALL_DIR="${COMPOSEMUX_INSTALL_DIR:-$HOME/.local/bin}"
 
 info() { printf '%s\n' "$*"; }
@@ -59,8 +65,23 @@ fi
 # download <url> <dest-file>. Fails non-zero on any HTTP or network error.
 download() {
   if [ "$DOWNLOADER" = curl ]; then
-    curl -fsSL "$1" -o "$2"
+    case "$1" in
+      https://*)
+        # The real path. Pin the transport to HTTPS/TLS 1.2+ and forbid a
+        # redirect from downgrading it to plaintext — GitHub redirects the
+        # release-asset URL to a CDN, and that hop must stay HTTPS.
+        curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2"
+        ;;
+      *)
+        # A non-HTTPS URL is only ever reached through an explicit COMPOSEMUX_*
+        # override (a mock server or a mirror). Still forbid a redirect from
+        # switching protocols underneath us.
+        curl -fsSL --proto-redir '=https' "$1" -o "$2"
+        ;;
+    esac
   else
+    # wget fallback. The default URLs are HTTPS; --https-only is not portable to
+    # busybox wget, so transport safety rests on the https:// URLs themselves.
     wget -q -O "$2" "$1"
   fi
 }
@@ -114,8 +135,21 @@ detect_target() {
   case "$os" in
     Linux)
       case "$arch" in
+        # x86_64 Linux ships both a glibc and a musl build.
         x86_64) echo "x86_64-unknown-linux-$(libc_variant)" ;;
-        arm64)  echo "aarch64-unknown-linux-gnu" ;;
+        # aarch64 Linux ships glibc ONLY — there is no aarch64-musl artifact.
+        # On a musl arm64 box (e.g. Alpine) the glibc archive would download,
+        # its checksum would verify, and it would then fail to exec with a
+        # cryptic loader error. Refuse it the way the Intel-Mac case does.
+        arm64)
+          if [ "$(libc_variant)" = musl ]; then
+            err "aarch64 Linux has no musl prebuilt binary (only glibc is built)."
+            err "Install from source with a Rust toolchain instead:"
+            err "    cargo install ${BIN}"
+            exit 1
+          fi
+          echo "aarch64-unknown-linux-gnu"
+          ;;
         *) die "unsupported Linux architecture: $(uname -m)" ;;
       esac
       ;;
@@ -145,20 +179,48 @@ detect_target() {
 # All release tags are "vX.Y.Z" (release.yml triggers on "v*" and strips the
 # leading "v" for asset names). We normalise any override the same way, so both
 # `0.1.0` and `v0.1.0` work.
+# validate_version — a version string becomes part of a URL and a filesystem
+# path, and (for the API path) it originates in JSON from a host the user can
+# override. Shape-check it before it is used anywhere: allow only digits,
+# letters, dot, plus and hyphen (enough for any semver, including pre-release
+# and build metadata), require a leading digit, and reject "..". This blocks
+# path traversal, whitespace, and shell metacharacters.
+validate_version() {
+  case "$1" in
+    "") die "empty version string" ;;
+    *[!0-9A-Za-z.+-]*) die "unexpected version string: $1" ;;
+  esac
+  case "$1" in
+    [0-9]*) : ;;
+    *) die "unexpected version string: $1" ;;
+  esac
+  case "$1" in
+    *..*) die "unexpected version string: $1" ;;
+  esac
+}
+
 resolve_version() {
   if [ -n "${COMPOSEMUX_VERSION:-}" ]; then
-    printf '%s\n' "${COMPOSEMUX_VERSION#v}"
+    v="${COMPOSEMUX_VERSION#v}"
+    validate_version "$v"
+    printf '%s\n' "$v"
     return
   fi
   json="$1"
   if ! download "$API_URL" "$json"; then
-    die "could not reach the GitHub release API at $API_URL"
+    # download() failed: the endpoint could not be fetched at all.
+    die "could not fetch the release list from $API_URL (network error or host unreachable)"
   fi
   # Extract tag_name without a jq dependency. GitHub returns it as
   #   "tag_name": "v0.1.0"
   tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | head -n1)"
-  [ -n "$tag" ] || die "could not find tag_name in the release API response"
-  printf '%s\n' "${tag#v}"
+  # We reached the API but found no tag_name — e.g. a 404 when no release has
+  # been published yet, or a rate-limit / error JSON. That is not a network
+  # problem, so say so distinctly.
+  [ -n "$tag" ] || die "no release found at $API_URL (the response had no tag_name — no published release yet, or a rate-limit/error response)"
+  v="${tag#v}"
+  validate_version "$v"
+  printf '%s\n' "$v"
 }
 
 # --- Main --------------------------------------------------------------------
