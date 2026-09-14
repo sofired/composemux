@@ -3,11 +3,11 @@ name = "composemux"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Terminal UI for Docker Compose logs, with a navigable service list and pinnable output panes"
+description = "Read-only terminal UI for Docker Compose logs — a live service list and up to two pinnable panes"
 license = "MIT"
 repository = "https://github.com/sofired/composemux"
 readme = "README.md"
-keywords = ["docker", "compose", "tui", "logs", "ratatui"]
+keywords = ["docker", "compose", "tui", "logs", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 # The demo stack under demo/ exists to record the README demo against.
 # It is not part of the library and has no business in the crate tarball.
