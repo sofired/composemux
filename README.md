@@ -214,24 +214,10 @@ reconnecting resumes from a one-second boundary, the finest resolution the
 Engine API offers here. A couple of already-visible lines can reappear as a
 result — the deliberate trade: a duplicated line beats a missing one.
 
-If the daemon stops answering, composemux keeps retrying rather than exiting,
-and the status bar says which way it's failing, since the three point you
-somewhere different:
-
-- `Docker daemon unreachable - retrying` — nothing was reached. Start Docker.
-- `Docker daemon not answering - retrying` — the request was taken and never
-  came back. Docker is running but wedged; restarting composemux won't help.
-- `Docker daemon rejected the request - retrying` — refused rather than lost.
-  Run with
-  `COMPOSEMUX_DEBUG=1` and the actual error lands in `composemux.log` in your
-  temp directory.
-
-Statuses and logs hold at their last known values until the daemon answers
-again, at which point the note clears itself. It takes a short run of failed
-polls to appear, so a single dropped request never flashes it. (Startup has no
-status bar yet, so a daemon that goes quiet during connect prints to stderr
-after five seconds — including which `DOCKER_HOST` it's waiting on — and keeps
-waiting; a daemon still coming up is a normal thing for a wrapper to race.)
+If the daemon stops answering, composemux keeps retrying instead of exiting —
+the status bar says how it's failing, and every status and log holds at its
+last-known value until it recovers. (Set `COMPOSEMUX_DEBUG=1` to log the
+underlying error.)
 
 Everything then passes through a `vt100` terminal emulator before it reaches the
 screen, which is why colour, cursor movement, and progress bars behave rather
