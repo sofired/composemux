@@ -17,7 +17,9 @@
 #
 # Environment overrides:
 #   COMPOSEMUX_VERSION      Pin a version (e.g. 0.1.0). Default: latest release.
-#   COMPOSEMUX_INSTALL_DIR  Where to install. Default: $HOME/.local/bin.
+#   COMPOSEMUX_INSTALL_DIR  Where to install (used verbatim). Default: the first
+#                           of ~/.local/bin, ~/bin, ~/.cargo/bin already on PATH,
+#                           else ~/.local/bin.
 #   COMPOSEMUX_API_URL      GitHub "latest release" JSON endpoint. For testing.
 #   COMPOSEMUX_BASE_URL     Release-download base URL. For testing/mirrors.
 #
@@ -29,17 +31,77 @@ REPO="sofired/composemux"
 BIN="composemux"
 API_URL="${COMPOSEMUX_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
 BASE_URL="${COMPOSEMUX_BASE_URL:-https://github.com/${REPO}/releases/download}"
-# Fall back to $HOME only when it is set; on a minimal container/CI where HOME
-# is unset, `set -u` would otherwise abort with a cryptic "HOME: parameter not
-# set". Require one of the two to be set, with a message that names the fix.
-if [ -z "${COMPOSEMUX_INSTALL_DIR:-}" ]; then
-  : "${HOME:?composemux install: HOME is not set; set COMPOSEMUX_INSTALL_DIR to choose where to install}"
-fi
-INSTALL_DIR="${COMPOSEMUX_INSTALL_DIR:-$HOME/.local/bin}"
+# INSTALL_DIR is resolved just before installing (resolve_install_dir), once the
+# helper functions below are defined.
 
 info() { printf '%s\n' "$*"; }
 err()  { printf '%s\n' "composemux install: $*" >&2; }
 die()  { err "$*"; exit 1; }
+
+# on_path <dir> — true if <dir> is a literal entry in $PATH. $PATH is guarded so
+# an unset PATH (minimal env) does not trip `set -u`.
+on_path() {
+  case ":${PATH:-}:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# writable_dir <dir> — true if we could install into <dir>: it exists and is
+# writable, OR it does not exist yet and $HOME is writable (so `mkdir -p` under
+# $HOME would create it). Only tests; creates and touches nothing.
+writable_dir() {
+  if [ -d "$1" ]; then
+    [ -w "$1" ]
+  elif [ -e "$1" ]; then
+    return 1  # exists but is not a directory — unusable
+  else
+    [ -n "${HOME:-}" ] && [ -w "$HOME" ]
+  fi
+}
+
+# resolve_install_dir — echo the directory to install into.
+#   * COMPOSEMUX_INSTALL_DIR set  -> use it verbatim (explicit override wins,
+#     even if it is not on PATH — the caller then prints PATH guidance).
+#   * otherwise pick the FIRST candidate that is BOTH already on $PATH AND
+#     installable, in this order: $HOME/.local/bin, $HOME/bin,
+#     ${CARGO_HOME:-$HOME/.cargo}/bin. So Rust users (cargo's bin is on PATH)
+#     and the common ~/.local/bin case never see a PATH message.
+#   * if none is on PATH -> default to $HOME/.local/bin (created below), and the
+#     caller prints guidance.
+resolve_install_dir() {
+  if [ -n "${COMPOSEMUX_INSTALL_DIR:-}" ]; then
+    printf '%s\n' "$COMPOSEMUX_INSTALL_DIR"
+    return
+  fi
+  [ -n "${HOME:-}" ] || die "HOME is not set; set COMPOSEMUX_INSTALL_DIR to choose where to install"
+  for d in "$HOME/.local/bin" "$HOME/bin" "${CARGO_HOME:-$HOME/.cargo}/bin"; do
+    if on_path "$d" && writable_dir "$d"; then
+      printf '%s\n' "$d"
+      return
+    fi
+  done
+  printf '%s\n' "$HOME/.local/bin"
+}
+
+# print_path_guidance <dir> — persistent, shell-specific copy-paste line to add
+# <dir> to PATH. Printed guidance only; we never edit an rc file ourselves. The
+# shell is chosen by the basename of $SHELL; fish uses its own PATH command, not
+# an `export` line.
+print_path_guidance() {
+  shell_path="${SHELL:-}"
+  shell_name="${shell_path##*/}"
+  case "$shell_name" in
+    zsh)  add="echo 'export PATH=\"$1:\$PATH\"' >> ~/.zshrc" ;;
+    bash) add="echo 'export PATH=\"$1:\$PATH\"' >> ~/.bashrc" ;;
+    fish) add="fish_add_path $1" ;;
+    *)    add="echo 'export PATH=\"$1:\$PATH\"' >> ~/.profile" ;;
+  esac
+  info ""
+  info "$1 is not on your PATH. Add it with:"
+  info "    $add"
+  info "then restart your shell."
+}
 
 # --- Tooling: prefer curl, fall back to wget; require a sha256 tool ----------
 
@@ -277,6 +339,10 @@ tar xzf "$tmp/$archive" -C "$tmp"
 src="$tmp/$stem/$BIN"
 [ -f "$src" ] || die "archive did not contain $stem/$BIN"
 
+# Resolve the install dir now that all helpers are defined (prefers a dir
+# already on PATH; see resolve_install_dir).
+INSTALL_DIR="$(resolve_install_dir)"
+
 # Install into a no-sudo directory. Write to a temp name in the same directory
 # and mv into place so an interrupted copy cannot leave a half-written binary.
 mkdir -p "$INSTALL_DIR"
@@ -291,16 +357,11 @@ mv -f "$tmp_dest" "$dest"
 
 info "Installed ${BIN} to ${dest}"
 
-# PATH advice — we do not edit shell rc files silently. Guard $PATH with :- so
-# an unset PATH (minimal env) does not trip `set -u` after a successful install.
-case ":${PATH:-}:" in
-  *":$INSTALL_DIR:"*)
-    info "Run '${BIN}' to get started."
-    ;;
-  *)
-    info ""
-    info "${INSTALL_DIR} is not on your PATH. Add it, e.g.:"
-    info "    export PATH=\"${INSTALL_DIR}:\$PATH\""
-    info "then restart your shell (or add that line to your shell's rc file)."
-    ;;
-esac
+# PATH advice — we do not edit shell rc files silently. If the resolved dir is
+# already on PATH (the common case, since we prefer such a dir), there is
+# nothing to add; otherwise print persistent, shell-specific guidance.
+if on_path "$INSTALL_DIR"; then
+  info "Run '${BIN}' to get started."
+else
+  print_path_guidance "$INSTALL_DIR"
+fi
