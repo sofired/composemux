@@ -226,9 +226,9 @@ is left alone.
 
 The demo in the project README is recorded against this stack, and the
 recording is code: `demo.tape` drives [VHS](https://github.com/charmbracelet/vhs)
-through the beats in [#84](https://github.com/sofired/composemux/issues/84),
-and `record-drive` fires the activity at fixed offsets so a take is
-reproducible. composemux is full screen for the whole take, so the events have
+through the take's beats — pinning two services, traffic in both panes, a job
+drawing a progress bar, a stack trace, and one status transition — and
+`record-drive` fires the activity at fixed offsets so a take is reproducible. composemux is full screen for the whole take, so the events have
 to come from a timer rather than from anything visible on camera; the tape
 starts `record-drive` off camera and its sleeps are lined up against that
 schedule.
