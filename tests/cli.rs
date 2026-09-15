@@ -66,6 +66,19 @@ fn help_and_version_succeed_without_touching_docker() {
             .expect("the binary should run");
         assert!(output.status.success(), "{flag} should exit zero");
         assert!(!output.stdout.is_empty(), "{flag} should print something");
+
+        if flag == "--version" {
+            // Pin the format the Homebrew formula's `test do` asserts on
+            // (`composemux <version>`), so a change to the binary name or the
+            // version string fails here at PR time rather than in the release
+            // rehearsal on a pushed tag.
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let expected = format!("composemux {}", env!("CARGO_PKG_VERSION"));
+            assert!(
+                stdout.contains(&expected),
+                "--version should print {expected:?}; got {stdout:?}"
+            );
+        }
     }
 }
 
