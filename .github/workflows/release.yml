@@ -27,7 +27,7 @@ jobs:
       # passes explicitly, so the two behave identically for us. rustup still
       # resolves `stable` at run time, so this freezes the action's code, not
       # the Rust version.
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0  # master, 2026-09-03
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-03
         with:
           toolchain: stable
           components: clippy, rustfmt
@@ -70,7 +70,7 @@ jobs:
           - { os: windows-latest,   target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0  # master, 2026-09-03
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-03
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
@@ -147,7 +147,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0  # master, 2026-09-03
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-03
         with:
           toolchain: stable
       # Re-running a tag (or re-tagging after the one-time bootstrap publish
