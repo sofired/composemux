@@ -35,7 +35,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
       - run: cargo fmt --all -- --check
         if: matrix.os == 'ubuntu-latest'
       - run: cargo clippy --locked --all-targets -- -D warnings
@@ -60,9 +60,9 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
       - run: cargo build --locked --release --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: composemux-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/composemux
@@ -89,13 +89,13 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
       # taiki-e/install-action fetches a prebuilt cargo-llvm-cov binary
       # (verifying its checksum/attestation) instead of compiling it from
       # crates.io, which saves a couple of minutes over `cargo install`. It's
       # maintained by cargo-llvm-cov's own author and is that tool's
       # README-recommended CI install path.
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037  # v2.87.32
         with:
           tool: cargo-llvm-cov
       - run: cargo llvm-cov --locked --all-features --workspace --lcov --output-path lcov.info
@@ -104,7 +104,7 @@ jobs:
       # enabled otherwise. Without it the main-branch report is rejected and
       # the README badge stays "unknown". Fork PRs can't read the secret and
       # codecov-action falls back to its tokenless path for them automatically.
-      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         with:
           files: lcov.info
           fail_ci_if_error: false
